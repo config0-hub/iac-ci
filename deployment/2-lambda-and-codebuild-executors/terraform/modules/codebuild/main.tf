@@ -1,12 +1,3 @@
-data "template_file" "buildspec" {
-  template = base64decode(var.buildspec_hash)
-  vars = {
-      s3_bucket=var.s3_bucket
-      aws_default_region=var.aws_default_region
-      aws_account_id=var.aws_account_id
-  }
-}
-
 # iam role
 resource "aws_iam_role" "default" {
   name = "${var.environment_name}-codebuild-role"
@@ -56,8 +47,8 @@ resource "aws_codebuild_project" "codebuild" {
   }
 
   source {
-    buildspec           = data.template_file.buildspec.rendered
-    type                = "NO_SOURCE"
+    type = "NO_SOURCE"
+    buildspec = base64decode("dmVyc2lvbjogMC4yCgpwaGFzZXM6CiAgYnVpbGQ6CiAgICBjb21tYW5kczoKICAgICAgLSBlY2hvICJTdGFydGluZyBidWlsZCBvbiAkKGRhdGUpIgogICAgICAtIGVjaG8gIkJ1aWxkIGNvbXBsZXRlZCBzdWNjZXNzZnVsbHkiCgphcnRpZmFjdHM6CiAgZmlsZXM6CiAgICAtICcqKi8qJw==")
   }
 
   logs_config {

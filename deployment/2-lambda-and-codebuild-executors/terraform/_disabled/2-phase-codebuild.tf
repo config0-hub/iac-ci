@@ -38,24 +38,9 @@ variable "compute_type" {
   default     = "BUILD_GENERAL1_SMALL"
 }
 
-variable "buildspec_hash" {
-  type        = string
-  description = "Base64-encoded buildspec template for Terraform execution"
-  default     = "dmVyc2lvbjogMC4yCgplbnY6CiAgdmFyaWFibGVzOgogICAgVE1QRElSOiAvdG1wCgpwaGFzZXM6CiAgaW5zdGFsbDoKICAgIGNvbW1hbmRzOgogICAgICAtIGFwdC1nZXQgdXBkYXRlCiAgICAgIC0gYXB0LWdldCBpbnN0YWxsIC15IHVuemlwCiAgICAgIC0gY3VybCAtTE8gaHR0cHM6Ly9yZWxlYXNlcy5oYXNoaWNvcnAuY29tL3RlcnJhZm9ybS8xLjUuNC90ZXJyYWZvcm1fMS41LjRfbGludXhfYW1kNjQuemlwCiAgICAgIC0gdW56aXAgdGVycmFmb3JtXzEuNS40X2xpbnV4X2FtZDY0LnppcAogICAgICAtIG12IHRlcnJhZm9ybSAvdXNyL2xvY2FsL2Jpbi90ZXJyYWZvcm0KCiAgcHJlX2J1aWxkOgogICAgb24tZmFpbHVyZTogQUJPUlQKICAgIGNvbW1hbmRzOgogICAgICAtIGF3cyBzMyBjcCBzMzovLyRSRU1PVEVfU1RBVEVGVUxfQlVDS0VULyRTVEFURUZVTF9JRCAkVE1QRElSLyRTVEFURUZVTF9JRC50YXIuZ3ogLS1xdWlldAogICAgICAtIG1rZGlyIC1wICRUTVBESVIvdGVycmFmb3JtCiAgICAgIC0gdGFyIHhmeiAkVE1QRElSLyRTVEFURUZVTF9JRC50YXIuZ3ogLUMgJFRNUERJUi90ZXJyYWZvcm0KICAgICAgLSBybSAtcmYgJFRNUERJUi8kU1RBVEVGVUxfSUQudGFyLmd6CgogIGJ1aWxkOgogICAgb24tZmFpbHVyZTogQUJPUlQKICAgIGNvbW1hbmRzOgogICAgICAtIGNkICRUTVBESVIvdGVycmFmb3JtCiAgICAgIC0gL3Vzci9sb2NhbC9iaW4vdGVycmFmb3JtIGluaXQKICAgICAgLSAvdXNyL2xvY2FsL2Jpbi90ZXJyYWZvcm0gcGxhbiAtb3V0PXRmcGxhbgogICAgICAtIC91c3IvbG9jYWwvYmluL3RlcnJhZm9ybSBhcHBseSB0ZnBsYW4gfHwgL3Vzci9sb2NhbC9iaW4vdGVycmZvcm0gZGVzdHJveSAtYXV0by1hcHByb3ZlCgogIHBvc3RfYnVpbGQ6CiAgICBjb21tYW5kczoKICAgICAgLSBjZCAkVE1QRElSL3RlcnJhZm9ybQogICAgICAtIHRhciBjZnogJFRNUERJUi8kU1RBVEVGVUxfSUQudGFyLmd6IC4KICAgICAgLSBhd3MgczMgY3AgJFRNUERJUi8kU1RBVEVGVUxfSUQudGFyLmd6IHMzOi8vJFJFTU9URV9TVEFURUZVTF9CVUNLRVQvJFNUQVRFRlVMX0lEIC0tcXVpZXQKICAgICAgLSBybSAtcmYgJFRNUERJUi8kU1RBVEVGVUxfSUQudGFyLmd6CiAgICAgIC0gZWNobyAiIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIgogICAgICAtIGVjaG8gIiMgdXBsb2FkZWQgczM6Ly8kUkVNT1RFX1NUQVRFRlVMX0JVQ0tFVC8kU1RBVEVGVUxfSUQiCiAgICAgIC0gZWNobyAiIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIgo="
-}
-
 #----------------------------------------------------
 # Template and IAM Configuration
 #----------------------------------------------------
-
-data "template_file" "buildspec" {
-  template = base64decode(var.buildspec_hash)
-  vars = {
-    s3_bucket          = var.stateful_bucket_name
-    aws_default_region = var.aws_default_region
-    aws_account_id     = data.aws_caller_identity.current.account_id
-  }
-}
 
 # IAM role for CodeBuild service
 resource "aws_iam_role" "codebuild" {
@@ -111,8 +96,8 @@ resource "aws_codebuild_project" "codebuild" {
   }
 
   source {
-    buildspec = data.template_file.buildspec.rendered
-    type      = "NO_SOURCE"
+    type = "NO_SOURCE"
+    buildspec = base64decode("dmVyc2lvbjogMC4yCgpwaGFzZXM6CiAgYnVpbGQ6CiAgICBjb21tYW5kczoKICAgICAgLSBlY2hvICJTdGFydGluZyBidWlsZCBvbiAkKGRhdGUpIgogICAgICAtIGVjaG8gIkJ1aWxkIGNvbXBsZXRlZCBzdWNjZXNzZnVsbHkiCgphcnRpZmFjdHM6CiAgZmlsZXM6CiAgICAtICcqKi8qJw==")
   }
 
   logs_config {
