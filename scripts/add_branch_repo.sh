@@ -1,448 +1,114 @@
 #!/bin/bash
 
-# ===== UTILITY FUNCTIONS =====
+# Function to generate a random string
 generate_random_string() {
     local prefix="$1"
     local length="${2:-16}"  # Default length is 16 if not specified
-
-    # Generate lowercase random string using /dev/urandom
     local random_string=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c "$length")
-
-    # Return the prefix + random string
     echo "${prefix}${random_string}"
 }
 
-check_optional_env_var() {
-    local var_name="$1"
-
-    if [ -z "${!var_name}" ]; then
-        echo "WARNING: Environment variable '$var_name' is not set."
-
-        if [ -z "$YES_TO_ALL" ]; then
-            read -p "Do you want to continue anyway? (y/N): " response
-            case "$response" in
-                [yY][eE][sS]|[yY])
-                    return 0
-                    ;;
-                *)
-                    echo "Aborting."
-                    return 1
-                    ;;
-            esac
-        else
-            echo "Continuing without '$var_name' because YES_TO_ALL is set."
-            return 0
-        fi
-    fi
-
-    return 0
+# Function to display usage information
+usage() {
+    echo "Usage: $0 <branch> [options] [folder]"
+    echo "Options:"
+    echo "  --tf-runtime <runtime>    Specify Terraform/OpenTofu runtime (default: tofu:1.9.1)"
+    echo ""
+    echo "If folder is not specified, branch value will be used as the folder."
+    exit 1
 }
 
-check_required_env_var() {
-  local var_name=$1
-  local error_message=$2
-  
-  if [ -z "${!var_name}" ]; then
-    echo "$error_message"
-    exit 8
-  fi
-}
+# Check for minimum arguments
+if [ $# -lt 1 ]; then
+    usage
+fi
 
-create_backend_tf() {
-  local directory=$1
-  local key=$2
-  
-  cat <<EOL > $directory/backend.tf
-terraform {
-  backend "s3" {
-    bucket         = "${TF_VAR_stateful_bucket_name}"
-    key            = "$key"
-    region         = "us-east-1"
-  }
-}
-EOL
-}
+# Default values
+TF_RUNTIME="tofu:1.9.1"
+BRANCH=""
+FOLDER=""
 
-run_terraform() {
-  local directory=$1
-  
-  cd $directory || exit 8
-  tofu init || exit 8
-  tofu plan || exit 8
-  tofu apply -auto-approve
-}
+# Parse arguments
+while [ "$1" != "" ]; do
+    case $1 in
+        --tf-runtime )       shift
+                            TF_RUNTIME="$1"
+                            ;;
+        --help )            usage
+                            ;;
+        -* )                echo "Unknown option: $1"
+                            usage
+                            ;;
+        * )                 if [ -z "$BRANCH" ]; then
+                                BRANCH="$1"
+                            elif [ -z "$FOLDER" ]; then
+                                FOLDER="$1"
+                            else
+                                echo "Too many positional arguments."
+                                usage
+                            fi
+                            ;;
+    esac
+    shift
+done
+
+# Validate required arguments
+if [ -z "$BRANCH" ]; then
+    echo "Error: Branch argument is required."
+    usage
+fi
+
+# Set folder to branch if not provided
+if [ -z "$FOLDER" ]; then
+    FOLDER="$BRANCH"
+fi
+
+echo "Using branch: $BRANCH"
+echo "Using folder: $FOLDER"
+echo "Using TF runtime: $TF_RUNTIME"
 
 # ===== ENVIRONMENT SETUP =====
-# Centralize environmental variables that don't change
-SRCDIR=$(pwd)
-export SRCDIR
 IAC_BUILD_DIR=${IAC_BUILD_DIR:=/var/tmp/iac-ci}
-IAC_REPO_SSH_KEYS_LOCAL_DIR=${IAC_BUILD_DIR}/github/ssh_keys
-IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
 ENV_FILE=${IAC_BUILD_DIR}/build_env_vars.env
-EXECUTORS_TF_BACKEND=${EXECUTORS_TF_BACKEND:=/tmp/backend.tf}
-EXECUTORS_BUILD_ENV_VARS_FILE=${EXECUTORS_BUILD_ENV_VARS_FILE:=/tmp/.build_executors_vars.env}
 
 # Check if env file exists and source it if it does
 if [ -f "$ENV_FILE" ]; then
-  echo "Found existing environment file. Loading variables from $ENV_FILE"
-  source "$ENV_FILE"
-  
-  # Check if TF_VAR_random_str is set in the file
-  if [ -z "$TF_VAR_random_str" ]; then
-    echo "TF_VAR_random_str not found in environment file. Will generate a new one."
-    NEEDS_INITIALIZATION=true
-  else
-    echo "Using existing TF_VAR_random_str: $TF_VAR_random_str"
-    NEEDS_INITIALIZATION=false
-  fi
+    echo "Found existing environment file. Loading variables from $ENV_FILE"
+    source "$ENV_FILE"
+    
+    # Check for required variables
+    if [ -z "$TRIGGER_ID" ]; then
+        echo "Error: Required variable TRIGGER_ID not found in environment file."
+        exit 1
+    fi
+    
+    if [ -z "$REPO_NAME" ]; then
+        echo "Error: Required variable REPO_NAME not found in environment file."
+        exit 1
+    fi
 else
-  echo "No existing environment file found. Will create one."
-  NEEDS_INITIALIZATION=true
-  
-  # Create directory for env file
-  mkdir -p $IAC_BUILD_DIR
-  
-  # Write unchanging environment variables to file
-  cat <<EOL > "$ENV_FILE"
-# SSM parameter paths
-export SSM_GITHUB_TOKEN="/iac-ci/github/token"
-export SSM_SSH_KEY="/iac-ci/github/repo/iac-ci/private_key"
-export SSM_INFRACOST_API_KEY="/iac-ci/infracost/api_key"
-export SSM_SLACK_WEBHOOK_HASH="/iac-ci/slack/webhook/url"
-
-# Application names and settings
-export REPO_NAME="iac-ci"
-export APP_NAME_IAC="iac-ci"
-export TF_VAR_aws_default_region="us-east-1"
-export BASE_DIR_EXECUTORS="${IAC_BUILD_DIR}/build/executors"
-export IAC_BUILD_DIR="${IAC_BUILD_DIR}"
-export IAC_REPO_SSH_KEYS_EMAIL="$IAC_REPO_SSH_KEYS_EMAIL"
-export IAC_REPO_SSH_KEYS_LOCAL_DIR="$IAC_REPO_SSH_KEYS_LOCAL_DIR"
-export TF_VAR_environment_name="iac-ci"
-
-# Constant AWS settings
-export TF_VAR_hash_key="_id"
-export TF_VAR_resource_name="iac-ci"
-export TF_VAR_key_name="iac-ci"
-export TF_VAR_billing_mode="PAY_PER_REQUEST"
-export TF_VAR_step_function_name="iac-ci-stepf-ci"
-export TF_VAR_handler="app.handler"
-export TF_VAR_lambda_env_vars='{"ENV": "build", "IAC_PLATFORM":"iac-ci", "DEBUG_IAC_CI":"true"}'
-export TF_VAR_cloud_tags='{"environment": "iac-ci", "purpose": "iac-ci"}'
-export TF_VAR_dynamodb_names='[ "iac-ci-runs", "iac-ci-settings" ]'
-export TF_VAR_topic_name="iac-ci-codebuild-complete-trigger"
-export TF_VAR_events="push,pull_request,issue_comment"
-export TF_VAR_repository="iac-ci"
-EOL
-
-  # Source the new environment file
-  source "$ENV_FILE"
+    echo "Error: Environment file not found at $ENV_FILE"
+    echo "Please run the initialization script first to generate required variables."
+    exit 1
 fi
 
-# ===== MAIN FUNCTIONS =====
-initialize_variables() {
-  if [ "$NEEDS_INITIALIZATION" = true ]; then
-    # Generate random string and IDs
-    [ -z "${TF_VAR_random_str}" ] && export TF_VAR_random_str=$(generate_random_string iacci 5)
-    export WEBHOOK_SECRET=$(generate_random_string iac-ci- 20)
-    export STATEFUL_ID=$(generate_random_string iac-ci- 10)
-    
-    # Generate bucket names
-    export TF_VAR_lambda_bucket_name="iac-ci-lambda-$TF_VAR_random_str"
-    export TF_VAR_codebuild_cache_bucket_name="iac-ci-codebuild-cache-$TF_VAR_random_str"
-    export TF_VAR_codebuild_log_bucket_name="iac-ci-codebuild-log-$TF_VAR_random_str"
-    export TF_VAR_tmp_bucket_name="iac-ci-tmp-$TF_VAR_random_str"
-    export TF_VAR_stateful_bucket_name="iac-ci-stateful-$TF_VAR_random_str"
-    export TF_VAR_log_bucket_name="iac-ci-log-$TF_VAR_random_str"
-    export TF_VAR_runs_bucket_name="iac-ci-runs-$TF_VAR_random_str"
-    
-    # TRIGGER_ID generation
-    local SECRET_OBJ="${TF_VAR_tmp_bucket_name}.${TF_VAR_lambda_bucket_name}.${TF_VAR_stateful_bucket_name}"
-    local SECRET=$(python3 -c "import hashlib; print(hashlib.md5('$SECRET_OBJ'.encode('utf-8')).hexdigest())")
-    local TRIGGER_OBJ="${SECRET}.${APP_NAME_IAC}"
-    export TRIGGER_ID=$(python3 -c "import hashlib; print(hashlib.md5('$TRIGGER_OBJ'.encode('utf-8')).hexdigest())")
-    
-    # Add the generated variables to the environment file
-    cat <<EOL >> "$ENV_FILE"
+# Generate a new STATEFUL_ID for this run (only thing that changes each time)
+STATEFUL_ID=$(generate_random_string "iac-ci-" 10)
+echo "Generated new STATEFUL_ID: $STATEFUL_ID"
 
-# Dynamically generated variables
-export TF_VAR_random_str="$TF_VAR_random_str"
-export WEBHOOK_SECRET="$WEBHOOK_SECRET"
-export STATEFUL_ID="$STATEFUL_ID"
-export TRIGGER_ID="$TRIGGER_ID"
-
-# Generated bucket names
-export TF_VAR_lambda_bucket_name="$TF_VAR_lambda_bucket_name"
-export TF_VAR_codebuild_cache_bucket_name="$TF_VAR_codebuild_cache_bucket_name"
-export TF_VAR_codebuild_log_bucket_name="$TF_VAR_codebuild_log_bucket_name"
-export TF_VAR_tmp_bucket_name="$TF_VAR_tmp_bucket_name"
-export TF_VAR_stateful_bucket_name="$TF_VAR_stateful_bucket_name"
-export TF_VAR_log_bucket_name="$TF_VAR_log_bucket_name"
-export TF_VAR_runs_bucket_name="$TF_VAR_runs_bucket_name"
-EOL
-  fi
-}
-
-authenticate_and_check_prerequisites() {
-  # Check required environment variables
-  check_required_env_var "GITHUB_TOKEN"
-  check_optional_env_var "INFRACOST_API_KEY"
-  check_optional_env_var "SLACK_WEBHOOK_HASH"
-
-  # Authenticate to github
-  gh auth login
-}
-
-create_ssh_keys() {
-  # Check if PRIVATE_SSH_KEY_HASH is already set in the environment file
-  if grep -q "PRIVATE_SSH_KEY_HASH" "$ENV_FILE"; then
-    echo "SSH keys already created. Using existing PRIVATE_SSH_KEY_HASH."
-    return
-  fi
-
-  mkdir -p $IAC_REPO_SSH_KEYS_LOCAL_DIR
-  ssh-keygen -t rsa -b 2048 -C "$IAC_REPO_SSH_KEYS_EMAIL" -f $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci -N ""
-  export PRIVATE_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci -w0)
-  export PUBLIC_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci.pub -w0)
-
-  echo -e "\n# SSH Keys\nexport PRIVATE_SSH_KEY_HASH=\"$PRIVATE_SSH_KEY_HASH\"" >> "$ENV_FILE"
-  echo -e "\n# SSH Keys\nexport PUBLIC_SSH_KEY_HASH=\"$PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
-  echo -e "\n# SSH Keys\nexport TF_VAR_public_key_hash=\"$PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
-}
-
-create_s3_buckets() {
-  cd $SRCDIR/deployment/1-s3-buckets
-  tofu init
-  tofu plan
-  tofu apply -auto-approve
-}
-
-upload_lambda_function() {
-  cd $SRCDIR
-  local S3_BUCKET=$TF_VAR_lambda_bucket_name
-  local TMP_BUILD_DIR="/tmp/iac-ci-build"
-  
-  rm -rf $TMP_BUILD_DIR
-  mkdir -p $TMP_BUILD_DIR || exit 9
-  unzip artifacts/base.iac-ci-system-lambda.zip -d $TMP_BUILD_DIR || exit 9
-  cp -rp src/* $TMP_BUILD_DIR/ || exit 9
-  rm -rf /tmp/iac-ci-system.zip  || exit 9
-  cd $TMP_BUILD_DIR || exit 9
-  zip -r /tmp/iac-ci-system.zip . || exit 9
-  cd .. || exit 9
-  rm -rf $TMP_BUILD_DIR || exit 9
-  
-  aws s3 cp /tmp/iac-ci-system.zip s3://$S3_BUCKET/iac-ci-system.zip
-  
-  echo "# isolating functions with a copy of code"
-  
-  for S3_KEY_COPY in iac-ci-pkgcode-to-s3.zip iac-ci-process-webhook.zip iac-ci-trigger-codebuild.zip iac-ci-trigger-lambda.zip iac-ci-update-pr.zip iac-ci-check-codebuild.zip 
-  do
-      aws s3 cp s3://$S3_BUCKET/iac-ci-system.zip s3://$S3_BUCKET/$S3_KEY_COPY
-  done
-}
-
-install_iac_ci_executors() {
-  cd $SRCDIR
-  echo "creating ${EXECUTORS_BUILD_ENV_VARS_FILE} file"
-  cat <<EOL > $EXECUTORS_BUILD_ENV_VARS_FILE
-export BASE_DIR_EXECUTORS="${IAC_BUILD_DIR}/build/executors"
-export TF_VAR_environment_name="$TF_VAR_environment_name"
-export TF_VAR_codebuild_cache_bucket_name="$TF_VAR_codebuild_cache_bucket_name"
-export TF_VAR_codebuild_log_bucket_name="$TF_VAR_codebuild_log_bucket_name"
-export TF_VAR_tmp_bucket_name="$TF_VAR_tmp_bucket_name"
-export TF_VAR_lambda_bucket_name="$TF_VAR_lambda_bucket_name"
-export TF_VAR_stateful_bucket_name="$TF_VAR_stateful_bucket_name"
-export TF_VAR_log_bucket_name="$TF_VAR_log_bucket_name"
-export TF_VAR_runs_bucket_name="$TF_VAR_runs_bucket_name"
-export TF_VAR_aws_default_region="us-east-1"
-EOL
-
-  source $EXECUTORS_BUILD_ENV_VARS_FILE
-
-  BACKEND_BASE_DIR_EXECUTORS="$(dirname "$BASE_DIR_EXECUTORS")"
-  mkdir -p ${IAC_BUILD_DIR}/build/executors
-  create_backend_tf "$BASE_DIR_EXECUTORS" "iac-ci"
-  
-  cd deployment/2-lambda-and-codebuild-executors/
-  ./create.sh
-}
-
-install_dynamodb() {
-  cd $SRCDIR
-  create_backend_tf "$SRCDIR/deployment/3-dynamodb" "iac-ci-system/dynamodb"
-  run_terraform "$SRCDIR/deployment/3-dynamodb"
-}
-
-install_lambda_functions() {
-  cd $SRCDIR
-  export TF_VAR_s3_bucket=$TF_VAR_lambda_bucket_name
-  export TF_VAR_bucket_names="[\"$TF_VAR_lambda_bucket_name\",\"$TF_VAR_stateful_bucket_name\",\"$TF_VAR_tmp_bucket_name\",\"$TF_VAR_log_bucket_name\",\"$TF_VAR_runs_bucket_name\"]"
-  create_backend_tf "$SRCDIR/deployment/4-lambda" "iac-ci-system/lambda-funcs"
-  run_terraform "$SRCDIR/deployment/4-lambda"
-}
-
-install_step_functions() {
-  cd $SRCDIR
-  create_backend_tf "$SRCDIR/deployment/5-stepfunc" "iac-ci-system/stepfunc"
-  run_terraform "$SRCDIR/deployment/5-stepfunc"
-}
-
-install_trigger_lambda() {
-  cd $SRCDIR
-  export S3_BUCKET=$TF_VAR_lambda_bucket_name
-  export TF_VAR_s3_bucket=$TF_VAR_lambda_bucket_name
-  export TF_VAR_lambda_name="iac-ci-lambda_trigger_stepf"
-  export TF_VAR_s3_key="iac-ci-lambda_trigger_stepf.zip"
-  export TF_VAR_bucket_names="[\"$TF_VAR_lambda_bucket_name\",\"$TF_VAR_stateful_bucket_name\",\"$TF_VAR_tmp_bucket_name\",\"$TF_VAR_log_bucket_name\",\"$TF_VAR_runs_bucket_name\"]"
-  
-  cd deployment/6-trigger-stepf/lambda/
-  ./docker-to-lambda.sh || exit 9
-  cd -
-  
-  create_backend_tf "$SRCDIR/deployment/6-trigger-stepf/terraform" "iac-ci-system/trigger-stepf"
-  run_terraform "$SRCDIR/deployment/6-trigger-stepf/terraform"
-}
-
-install_github_repo_params() {
-  cd $SRCDIR
-  export TF_VAR_url=${BASE_URL}/${TRIGGER_ID}
-  export TF_VAR_secret=$WEBHOOK_SECRET
-  export TF_VAR_public_key_hash=$PUBLIC_SSH_KEY_HASH
-  create_backend_tf "$SRCDIR/deployment/9-github-params" "iac-ci-system/repo/iac-ci/github-params"
-  run_terraform "$SRCDIR/deployment/9-github-params"
-  echo "webhook url \"${BASE_URL}/${TRIGGER_ID}\""
-}
-
-install_api_gateway() {
-  cd $SRCDIR
-
-  export TF_VAR_lambda_name="iac-ci-lambda_trigger_stepf"
-  create_backend_tf "$SRCDIR/deployment/7-api-gateway" "iac-ci-system/api-gateway"
-  run_terraform "$SRCDIR/deployment/7-api-gateway"
-
-  # Capture the base_url from Terraform output
-  BASE_URL=$(cd $SRCDIR/deployment/7-api-gateway && tofu output -raw base_url)
-
-  if [ ! -z "$BASE_URL" ]; then
-    echo "API Gateway URL: $BASE_URL"
-    export BASE_URL
-
-    # Add BASE_URL to environment file if not already there
-    if ! grep -q "BASE_URL" "$ENV_FILE"; then
-      echo -e "\n# API Gateway URL\nexport BASE_URL=\"$BASE_URL\"" >> "$ENV_FILE"
-    else
-      # Update existing BASE_URL in environment file
-      sed -i "s|export BASE_URL=.*|export BASE_URL=\"$BASE_URL\"|" "$ENV_FILE"
-    fi
-  else
-    echo "Warning: Could not capture base_url from Terraform output"
-  fi
-}
-
-install_sns_topic_subscription() {
-  cd $SRCDIR
-  
-  export TF_VAR_lambda_name="iac-ci-check-codebuild"
-  
-  create_backend_tf "$SRCDIR/deployment/8-sns_topic_subscription" "iac-ci-system/sns-topic-subscription"
-  run_terraform "$SRCDIR/deployment/8-sns_topic_subscription"
-}
-
-upload_ssm_parameters() {
-  cd $SRCDIR
-  
-  aws ssm put-parameter \
-    --name $SSM_GITHUB_TOKEN \
-    --type "SecureString" \
-    --value $GITHUB_TOKEN \
-    --overwrite || (echo "cannot upload $SSM_GITHUB_TOKEN to ssm" && exit 2)
-  
-  aws ssm put-parameter \
-    --name $SSM_SSH_KEY \
-    --type "SecureString" \
-    --value $PRIVATE_SSH_KEY_HASH \
-    --overwrite || (echo "cannot upload $SSM_SSH_KEY to ssm" && exit 2)
-
-  aws ssm put-parameter \
-    --name $SSM_INFRACOST_API_KEY \
-    --type "SecureString" \
-    --value $INFRACOST_API_KEY \
-    --overwrite || (echo "cannot upload $SSM_SSM_INFRACOST_API_KEY to ssm" && exit 2)
-
-  aws ssm put-parameter \
-    --name $SSM_SLACK_WEBHOOK_HASH \
-    --type "SecureString" \
-    --value $SLACK_WEBHOOK_HASH \
-    --overwrite || (echo "cannot upload $SSM_SLACK_WEBHOOK_HASH to ssm" && exit 2)
-}
-
-configure_repo_information() {
-  cd $SRCDIR
-  
-  export TF_VAR_url="$BASE_URL/$TRIGGER_ID"
-  export TF_VAR_secret=$WEBHOOK_SECRET
-
-  cat <<EOF > /tmp/repo_data_dynamodb.json
-{
-  "_id": {
-    "S": "$TRIGGER_ID"
-  },
-  "trigger_id": {
-    "S": "$TRIGGER_ID"
-  },
-  "app_name_iac": {
-    "S": "iac-ci"
-  },
-  "iac_ci_repo": {
-    "S": "$REPO_NAME"
-  },
-  "repo_name": {
-    "S": "$REPO_NAME"
-  },
-  "secret": {
-    "S": "$WEBHOOK_SECRET"
-  },
-  "run_title": {
-    "S": "iac-ci"
-  },
-  "ssm_ssh_key": {
-    "S": "$SSM_SSH_KEY"
-  },
-  "ssm_iac_ci_github_token": {
-    "S": "$SSM_GITHUB_TOKEN"
-  },
-  "s3_bucket_tmp": {
-    "S": "$TF_VAR_tmp_bucket_name"
-  },
-  "remote_stateful_bucket": {
-    "S": "$TF_VAR_stateful_bucket_name"
-  },
-  "type": {
-    "S": "registered_repo"
-  },
-  "ssm_slack_webhook_hash": {
-    "S": "$SSM_SLACK_WEBHOOK_HASH"
-  },
-  "ssm_infracost_api_key": {
-    "S": "$SSM_INFRACOST_API_KEY"
-  }
-}
-EOF
-  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/repo_data_dynamodb.json && echo "repo data uploaded"
-  rm -rf /tmp/repo_data_dynamodb.json
-}
-
+# ===== MAIN FUNCTION =====
 configure_iac_code_information() {
-  cd $SRCDIR
+    # Generate unique ID for this configuration
+    local STRING_OBJECT="iac_ci.${TRIGGER_ID}.${BRANCH}"
+    local _ID=$(echo -n "$STRING_OBJECT" | md5sum | awk '{print $1}')
 
-  local BRANCH="test"
-  local FOLDER="test"
-  local STRING_OBJECT="iac_ci.${TRIGGER_ID}.${BRANCH}"
-  local _ID=$(echo -n "$STRING_OBJECT" | md5sum | awk '{print $1}')
+    echo "Creating configuration with ID: $_ID"
+    echo "TRIGGER_ID: $TRIGGER_ID"
+    echo "STATEFUL_ID: $STATEFUL_ID"
+    echo "REPO_NAME: $REPO_NAME"
 
-  cat <<EOF > /tmp/iac-code-data.json
+    # Create the JSON data for DynamoDB
+    cat <<EOF > /tmp/iac-code-data.json
 {
   "_id": {
     "S": "$_ID"
@@ -466,7 +132,7 @@ configure_iac_code_information() {
     "S": "$STATEFUL_ID"
   },
   "tf_runtime": {
-    "S": "tofu:1.9.1"
+    "S": "$TF_RUNTIME"
   },
   "app_name": {
     "S": "terraform"
@@ -486,6 +152,9 @@ configure_iac_code_information() {
   "iac_ci_folder": {
     "S": "$FOLDER"
   },
+  "iac_ci_branch": {
+    "S": "$BRANCH"
+  },
   "apply_str": {
     "S": "apply tf"
   },
@@ -497,16 +166,25 @@ configure_iac_code_information() {
   }
 }
 EOF
-  
-  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/iac-code-data.json && echo "iac code data uploaded"
-  rm -rf /tmp/iac-code-data.json
-}
-
-# ===== MAIN EXECUTION =====
-main() {
-  initialize_variables
-  configure_iac_code_information
+    
+    # Insert the data into DynamoDB
+    echo "Uploading configuration to DynamoDB table: iac-ci-settings..."
+    aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/iac-code-data.json
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ Successfully uploaded configuration for branch '$BRANCH' and folder '$FOLDER'"
+        echo "💡 Use these values in your commands:"
+        echo "   Branch: $BRANCH"
+        echo "   Folder: $FOLDER"
+        echo "   Stateful ID: $STATEFUL_ID"
+    else
+        echo "❌ Failed to upload configuration to DynamoDB"
+        exit 1
+    fi
+    
+    # Clean up
+    rm -f /tmp/iac-code-data.json
 }
 
 # Execute main function
-main
+configure_iac_code_information
