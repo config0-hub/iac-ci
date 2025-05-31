@@ -69,6 +69,7 @@ build_lambda_package() {
     cd temp || exit 9
     rm -rf ${TMPDIR}/iac-ci.zip || exit 9
     zip -r ${TMPDIR}/iac-ci.zip . || exit 9
+    cp -rp ${TMPDIR}/iac-ci.zip /tmp/iac-ci-executors.zip || echo "copy failed"
     cd ..
     rm -rf temp || exit 9
     echo ""

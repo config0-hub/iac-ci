@@ -167,14 +167,10 @@ class TFCmdOnAWS(TFAppHelper):
 
     def _get_tf_plan(self):
         """Get Terraform plan commands"""
-        cmds = [
-            f'{self.base_cmd} plan -out={self.tmp_base_output_file}.tfplan',
-            f'{self.base_cmd} show -no-color {self.tmp_base_output_file}.tfplan > {self.tmp_base_output_file}.tfplan.out',
-            f'{self.base_cmd} show -no-color -json {self.tmp_base_output_file}.tfplan > {self.tmp_base_output_file}.tfplan.json'
-        ]
-        cmds.extend(self.local_output_to_s3(suffix="tfplan", last_apply=None))
-        cmds.extend(self.local_output_to_s3(suffix="tfplan.json", last_apply=None))
+        cmds = [ f'{self.base_cmd} plan -no-color 2>&1 | tee {self.tmp_base_output_file}.tfplan.out' ]
         cmds.extend(self.local_output_to_s3(suffix="tfplan.out", last_apply=None))
+        cmds.append(f'{self.base_cmd} plan -out={self.tmp_base_output_file}.tfplan')
+        cmds.extend(self.local_output_to_s3(suffix="tfplan", last_apply=None))
         return cmds
 
     def get_tf_ci(self):

@@ -189,7 +189,7 @@ destroy_github_repo_params() {
   cd $SRCDIR
   export TF_VAR_url=${BASE_URL}/${TRIGGER_ID}
   export TF_VAR_secret=$SECRET
-  export TF_VAR_public_key=$PUBLIC_SSH_KEY_HASH
+  export TF_VAR_public_key=$FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH
   run_terraform_destroy "$SRCDIR/deployment/9-github-params"
 }
 

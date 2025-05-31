@@ -1,6 +1,13 @@
 #!/bin/bash
 
+# Add basic error handling
+set -e
+
 # ===== UTILITY FUNCTIONS =====
+log_info() {
+    echo "[$(date '+%H:%M:%S')] $1"
+}
+
 generate_random_string() {
     local prefix="$1"
     local length="${2:-16}"  # Default length is 16 if not specified
@@ -16,7 +23,7 @@ check_optional_env_var() {
     local var_name="$1"
 
     if [ -z "${!var_name}" ]; then
-        echo "WARNING: Environment variable '$var_name' is not set."
+        log_info "WARNING: Environment variable '$var_name' is not set."
 
         if [ -z "$YES_TO_ALL" ]; then
             read -p "Do you want to continue anyway? (y/N): " response
@@ -25,12 +32,12 @@ check_optional_env_var() {
                     return 0
                     ;;
                 *)
-                    echo "Aborting."
+                    log_info "Aborting."
                     return 1
                     ;;
             esac
         else
-            echo "Continuing without '$var_name' because YES_TO_ALL is set."
+            log_info "Continuing without '$var_name' because YES_TO_ALL is set."
             return 0
         fi
     fi
@@ -43,7 +50,7 @@ check_required_env_var() {
   local error_message=$2
   
   if [ -z "${!var_name}" ]; then
-    echo "$error_message"
+    log_info "$error_message"
     exit 8
   fi
 }
@@ -74,30 +81,31 @@ run_terraform() {
 
 # ===== ENVIRONMENT SETUP =====
 # Centralize environmental variables that don't change
-SRCDIR=$(pwd)
+readonly SRCDIR=$(pwd)
 export SRCDIR
-IAC_BUILD_DIR=${IAC_BUILD_DIR:=/var/tmp/iac-ci}
-IAC_REPO_SSH_KEYS_LOCAL_DIR=${IAC_BUILD_DIR}/github/ssh_keys
-IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
-ENV_FILE=${IAC_BUILD_DIR}/build_env_vars.env
-EXECUTORS_TF_BACKEND=${EXECUTORS_TF_BACKEND:=/tmp/backend.tf}
-EXECUTORS_BUILD_ENV_VARS_FILE=${EXECUTORS_BUILD_ENV_VARS_FILE:=/tmp/.build_executors_vars.env}
+readonly IAC_BUILD_DIR=${IAC_BUILD_DIR:=/var/tmp/iac-ci}
+readonly IAC_FIRST_REPO_TO_REGISTER=${IAC_FIRST_REPO_TO_REGISTER:=iac-ci}
+readonly IAC_REPO_SSH_KEYS_LOCAL_DIR=${IAC_BUILD_DIR}/github/ssh_keys
+readonly IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
+readonly ENV_FILE=${IAC_BUILD_DIR}/build_env_vars.env
+readonly EXECUTORS_TF_BACKEND=${EXECUTORS_TF_BACKEND:=/tmp/backend.tf}
+readonly EXECUTORS_BUILD_ENV_VARS_FILE=${EXECUTORS_BUILD_ENV_VARS_FILE:=/tmp/.build_executors_vars.env}
 
 # Check if env file exists and source it if it does
 if [ -f "$ENV_FILE" ]; then
-  echo "Found existing environment file. Loading variables from $ENV_FILE"
+  log_info "Found existing environment file. Loading variables from $ENV_FILE"
   source "$ENV_FILE"
   
   # Check if TF_VAR_random_str is set in the file
   if [ -z "$TF_VAR_random_str" ]; then
-    echo "TF_VAR_random_str not found in environment file. Will generate a new one."
+    log_info "TF_VAR_random_str not found in environment file. Will generate a new one."
     NEEDS_INITIALIZATION=true
   else
-    echo "Using existing TF_VAR_random_str: $TF_VAR_random_str"
+    log_info "Using existing TF_VAR_random_str: $TF_VAR_random_str"
     NEEDS_INITIALIZATION=false
   fi
 else
-  echo "No existing environment file found. Will create one."
+  log_info "No existing environment file found. Will create one."
   NEEDS_INITIALIZATION=true
   
   # Create directory for env file
@@ -107,12 +115,12 @@ else
   cat <<EOL > "$ENV_FILE"
 # SSM parameter paths
 export SSM_GITHUB_TOKEN="/iac-ci/github/token"
-export SSM_SSH_KEY="/iac-ci/github/repo/iac-ci/private_key"
+export SSM_SSH_KEY="/iac-ci/github/repo/${IAC_FIRST_REPO_TO_REGISTER}/private_key"
 export SSM_INFRACOST_API_KEY="/iac-ci/infracost/api_key"
 export SSM_SLACK_WEBHOOK_HASH="/iac-ci/slack/webhook/url"
 
 # Application names and settings
-export REPO_NAME="iac-ci"
+export REPO_NAME="${IAC_FIRST_REPO_TO_REGISTER}"
 export APP_NAME_IAC="iac-ci"
 export TF_VAR_aws_default_region="us-east-1"
 export BASE_DIR_EXECUTORS="${IAC_BUILD_DIR}/build/executors"
@@ -133,7 +141,7 @@ export TF_VAR_cloud_tags='{"environment": "iac-ci", "purpose": "iac-ci"}'
 export TF_VAR_dynamodb_names='[ "iac-ci-runs", "iac-ci-settings" ]'
 export TF_VAR_topic_name="iac-ci-codebuild-complete-trigger"
 export TF_VAR_events="push,pull_request,issue_comment"
-export TF_VAR_repository="iac-ci"
+export TF_VAR_repository="${IAC_FIRST_REPO_TO_REGISTER}"
 EOL
 
   # Source the new environment file
@@ -195,20 +203,20 @@ authenticate_and_check_prerequisites() {
 }
 
 create_ssh_keys() {
-  # Check if PRIVATE_SSH_KEY_HASH is already set in the environment file
-  if grep -q "PRIVATE_SSH_KEY_HASH" "$ENV_FILE"; then
-    echo "SSH keys already created. Using existing PRIVATE_SSH_KEY_HASH."
+  # Check if FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH is already set in the environment file
+  if grep -q "FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH" "$ENV_FILE"; then
+    log_info "SSH keys already created. Using existing FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH."
     return
   fi
 
   mkdir -p $IAC_REPO_SSH_KEYS_LOCAL_DIR
-  ssh-keygen -t rsa -b 2048 -C "$IAC_REPO_SSH_KEYS_EMAIL" -f $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci -N ""
-  export PRIVATE_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci -w0)
-  export PUBLIC_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/iac-ci.pub -w0)
+  ssh-keygen -t rsa -b 2048 -C "$IAC_REPO_SSH_KEYS_EMAIL" -f $IAC_REPO_SSH_KEYS_LOCAL_DIR/${IAC_FIRST_REPO_TO_REGISTER} -N ""
+  export FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/${IAC_FIRST_REPO_TO_REGISTER} -w0)
+  export FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH=$(base64  $IAC_REPO_SSH_KEYS_LOCAL_DIR/${IAC_FIRST_REPO_TO_REGISTER}.pub -w0)
 
-  echo -e "\n# SSH Keys\nexport PRIVATE_SSH_KEY_HASH=\"$PRIVATE_SSH_KEY_HASH\"" >> "$ENV_FILE"
-  echo -e "\n# SSH Keys\nexport PUBLIC_SSH_KEY_HASH=\"$PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
-  echo -e "\n# SSH Keys\nexport TF_VAR_public_key_hash=\"$PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
+  echo -e "\n# SSH Keys\nexport FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH=\"$FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH\"" >> "$ENV_FILE"
+  echo -e "\n# SSH Keys\nexport FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH=\"$FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
+  echo -e "\n# SSH Keys\nexport TF_VAR_public_key_hash=\"$FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH\"" >> "$ENV_FILE"
 }
 
 create_s3_buckets() {
@@ -235,7 +243,7 @@ upload_lambda_function() {
   
   aws s3 cp /tmp/iac-ci-system.zip s3://$S3_BUCKET/iac-ci-system.zip
   
-  echo "# isolating functions with a copy of code"
+  log_info "# isolating functions with a copy of code"
   
   for S3_KEY_COPY in iac-ci-pkgcode-to-s3.zip iac-ci-process-webhook.zip iac-ci-trigger-codebuild.zip iac-ci-trigger-lambda.zip iac-ci-update-pr.zip iac-ci-check-codebuild.zip 
   do
@@ -245,7 +253,7 @@ upload_lambda_function() {
 
 install_iac_ci_executors() {
   cd $SRCDIR
-  echo "creating ${EXECUTORS_BUILD_ENV_VARS_FILE} file"
+  log_info "creating ${EXECUTORS_BUILD_ENV_VARS_FILE} file"
   cat <<EOL > $EXECUTORS_BUILD_ENV_VARS_FILE
 export BASE_DIR_EXECUTORS="${IAC_BUILD_DIR}/build/executors"
 export TF_VAR_environment_name="$TF_VAR_environment_name"
@@ -309,10 +317,10 @@ install_github_repo_params() {
   cd $SRCDIR
   export TF_VAR_url=${BASE_URL}/${TRIGGER_ID}
   export TF_VAR_secret=$WEBHOOK_SECRET
-  export TF_VAR_public_key_hash=$PUBLIC_SSH_KEY_HASH
-  create_backend_tf "$SRCDIR/deployment/9-github-params" "iac-ci-system/repo/iac-ci/github-params"
+  export TF_VAR_public_key_hash=$FIRST_REPO_TO_REGISTER_PUBLIC_SSH_KEY_HASH
+  create_backend_tf "$SRCDIR/deployment/9-github-params" "iac-ci-system/repo/${IAC_FIRST_REPO_TO_REGISTER}/github-params"
   run_terraform "$SRCDIR/deployment/9-github-params"
-  echo "webhook url \"${BASE_URL}/${TRIGGER_ID}\""
+  log_info "webhook url \"${BASE_URL}/${TRIGGER_ID}\""
 }
 
 install_api_gateway() {
@@ -326,7 +334,7 @@ install_api_gateway() {
   BASE_URL=$(cd $SRCDIR/deployment/7-api-gateway && tofu output -raw base_url)
 
   if [ ! -z "$BASE_URL" ]; then
-    echo "API Gateway URL: $BASE_URL"
+    log_info "API Gateway URL: $BASE_URL"
     export BASE_URL
 
     # Add BASE_URL to environment file if not already there
@@ -337,7 +345,7 @@ install_api_gateway() {
       sed -i "s|export BASE_URL=.*|export BASE_URL=\"$BASE_URL\"|" "$ENV_FILE"
     fi
   else
-    echo "Warning: Could not capture base_url from Terraform output"
+    log_info "Warning: Could not capture base_url from Terraform output"
   fi
 }
 
@@ -357,25 +365,25 @@ upload_ssm_parameters() {
     --name $SSM_GITHUB_TOKEN \
     --type "SecureString" \
     --value $GITHUB_TOKEN \
-    --overwrite || (echo "cannot upload $SSM_GITHUB_TOKEN to ssm" && exit 2)
+    --overwrite || (log_info "cannot upload $SSM_GITHUB_TOKEN to ssm" && exit 2)
   
   aws ssm put-parameter \
     --name $SSM_SSH_KEY \
     --type "SecureString" \
-    --value $PRIVATE_SSH_KEY_HASH \
-    --overwrite || (echo "cannot upload $SSM_SSH_KEY to ssm" && exit 2)
+    --value $FIRST_REPO_TO_REGISTER_PRIVATE_SSH_KEY_HASH \
+    --overwrite || (log_info "cannot upload $SSM_SSH_KEY to ssm" && exit 2)
 
   aws ssm put-parameter \
     --name $SSM_INFRACOST_API_KEY \
     --type "SecureString" \
     --value $INFRACOST_API_KEY \
-    --overwrite || (echo "cannot upload $SSM_SSM_INFRACOST_API_KEY to ssm" && exit 2)
+    --overwrite || (log_info "cannot upload $SSM_SSM_INFRACOST_API_KEY to ssm" && exit 2)
 
   aws ssm put-parameter \
     --name $SSM_SLACK_WEBHOOK_HASH \
     --type "SecureString" \
     --value $SLACK_WEBHOOK_HASH \
-    --overwrite || (echo "cannot upload $SSM_SLACK_WEBHOOK_HASH to ssm" && exit 2)
+    --overwrite || (log_info "cannot upload $SSM_SLACK_WEBHOOK_HASH to ssm" && exit 2)
 }
 
 configure_repo_information() {
@@ -430,7 +438,7 @@ configure_repo_information() {
   }
 }
 EOF
-  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/repo_data_dynamodb.json && echo "repo data uploaded"
+  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/repo_data_dynamodb.json && log_info "repo data uploaded"
   rm -rf /tmp/repo_data_dynamodb.json
 }
 
@@ -498,7 +506,7 @@ configure_iac_code_information() {
 }
 EOF
   
-  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/iac-code-data.json && echo "iac code data uploaded"
+  aws dynamodb put-item --table-name iac-ci-settings --item file:///tmp/iac-code-data.json && log_info "iac code data uploaded"
   rm -rf /tmp/iac-code-data.json
 }
 

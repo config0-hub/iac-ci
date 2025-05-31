@@ -99,3 +99,38 @@ The easiest way to install the "iac-ci" system is through [config0.com](https://
 
 Alternatively, you can install the system manually.
 - Details: [Install "iac-ci" system manually](docs/INSTALL.md).
+ 
+## Repository Management
+
+"iac-ci" follows a two-tier repository management system similar to Config0's stack-based approach:
+
+### 1. Repository Registration
+Each GitHub repository must be registered once with the "iac-ci" system. This creates:
+- **Unique webhook endpoint** for the repository
+- **Repository-specific SSH keys** for secure access
+- **DynamoDB entry** with `type: "registered_repo"`
+
+### 2. IaC Configuration (Branch/Folder Tracking)
+After registration, you can add multiple IaC configurations to track different combinations of:
+- **Branch**: Which branch to monitor (e.g., `main`, `develop`, `feature/new-vpc`)
+- **Folder**: Which folder contains the IaC code (e.g., `infrastructure`, `terraform/production`)
+- **IaC Tool**: Terraform, Pulumi, CDK, etc.
+
+**Important Limitation**: Only **one IaC configuration per branch** is supported because webhooks are repository-specific, not folder-specific. When a webhook is received for a branch, the system looks up the single IaC configuration for that branch.
+
+### Repository Management Workflow
+
+```mermaid
+graph TD
+    A[GitHub Repository] --> B[Register Repository]
+    B --> C[Repository Entry in DynamoDB]
+    B --> D[SSH Keys Generated]
+    B --> E[Webhook URL Created]
+    
+    C --> F[Add IaC Config for main/infrastructure]
+    C --> G[Add IaC Config for develop/staging]
+    C --> H[Add IaC Config for feature/testing]
+    
+    F --> I[IaC Setting Entry - main branch]
+    G --> J[IaC Setting Entry - develop branch]
+    H --> K[IaC Setting Entry - feature branch]

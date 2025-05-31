@@ -52,7 +52,8 @@ resource "aws_lambda_function" "default" {
   
   environment {
     variables = {
-      DYNAMODB_TABLE    = "iac-ci-runs"
+      DYNAMODB_TABLE_RUNS    = "iac-ci-runs"
+      DYNAMODB_TABLE_SETTINGS    = "iac-ci-settings"
       STATE_MACHINE_ARN = "arn:aws:states:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:stateMachine:${var.step_function_name}"
     }
   }

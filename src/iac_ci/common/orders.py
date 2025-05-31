@@ -11,7 +11,7 @@ from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.boto3_file import S3FileBoto3
 from iac_ci.common.boto3_lambda import LambdaBoto3
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.run_helper import Notification, CreateTempParamStoreEntry, GetFrmDb, check_webhook_secret
+from iac_ci.common.run_helper import Notification, CreateTempParamStoreEntry, GetFrmDb
 from iac_ci.common.serialization import b64_encode, b64_decode
 from iac_ci.common.utilities import id_generator, get_hash_from_string, rm_rf, id_generator2
 
@@ -410,37 +410,6 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
         }
 
         return pr_info
-
-    def filter_items_by_secret(self, items):
-        """
-        Filters a list of items based on webhook signature verification.
-
-        This method iterates through a list of items, each potentially containing
-        a webhook secret. It attempts to verify the signature of the webhook
-        request using the provided secret, event body, and header signature.
-        If a valid signature is found, the corresponding item is returned.
-
-        Args:
-            items (list): A list of dictionaries, where each dictionary may
-                contain a "secret" key.
-
-        Returns:
-            dict or None: The first item from the list whose secret successfully
-            validates the webhook signature, or None if no valid signature is found.
-        """
-        for item in items:
-            secret = item.get("secret")
-            if not secret:
-                self.logger.debug(f'no secret provided in the trigger info for {item.get("_id")}/{item.get("type")}')
-                continue
-            self.logger.debug(f'secret provided in the trigger info for {item.get("_id")}/{item.get("type")}')
-            if check_webhook_secret(secret, self.event) is True:
-                self.logger.debug_highlight("secret signature validated")
-                return item
-            else:
-                self.logger.warn(f'INVALID secret provided in the trigger info for {item.get("_id")}/{item.get("type")}')
-        self.logger.error("cannot verify signature secret")
-        return
 
     def _set_trigger_info(self,trigger_id=None,repo_name=None):
         items = None

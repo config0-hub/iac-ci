@@ -70,18 +70,10 @@ class WebhookProcess(PlatformReporter):
         if self.event.get("path"):
             self.webhook_info["trigger_id"] = self.event["path"].split("/")[-1]  # get trigger_id from url
 
-        failed_message = None
-        if self.webhook_info.get("trigger_id"):
-            items = self.db.get_trigger_info(trigger_id=self.webhook_info["trigger_id"])
-            self.trigger_info = self.filter_items_by_secret(items)
-            if not self.trigger_info:
-                failed_message = f'INVALID SECRET: trigger_id: "{self.webhook_info["trigger_id"]}"'
-        else:
-            failed_message = 'need to provide a valid trigger_id to process webhook'
+        if not self.webhook_info.get("trigger_id"):
+            raise Exception('need to provide a valid trigger_id to process webhook')
 
-        if failed_message:
-            raise Exception(failed_message)
-
+        self.trigger_info = self.db.get_trigger_info(trigger_id=self.webhook_info["trigger_id"])[0]
         self._eval_issue()
 
         if os.environ.get("DEBUG_IAC_CI"):
@@ -806,9 +798,6 @@ class WebhookProcess(PlatformReporter):
             self.run_info.update(stepf_info)
             self.results.update(stepf_info)
 
-        if self.webhook_info["event_type"] != "push":
-            self._add_comment_to_github()
-
         self.add_log("#" * 32)
         self.add_log("# Summary")
         self.add_log("# Webhook loaded")
@@ -829,6 +818,10 @@ class WebhookProcess(PlatformReporter):
             "trigger_id": self.trigger_id,
             "iac_ci_id": self.iac_ci_id
         }
+
         self.insert_to_return()
+
+        if self.webhook_info["event_type"] != "push":
+            self._add_comment_to_github()
 
         return True

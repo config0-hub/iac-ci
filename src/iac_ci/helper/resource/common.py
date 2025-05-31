@@ -200,20 +200,17 @@ class TFAppHelper:
             raise ValueError("srcfile needs to be determined to upload to s3")
 
         _filename = os.path.basename(srcfile)
-        base_cmd = f'aws s3 cp {srcfile} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID'
+        base_cp_cmd = f'aws s3 cp {srcfile} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID'
 
         if last_apply:
-            cmds = f'{base_cmd}/applied/{_filename} || echo "trouble uploading output file"'
+            cmds = f'{base_cp_cmd}/applied/{_filename} || echo "trouble uploading output file"'
         else:
             cmds = [
-                f'aws s3 cp s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{_filename} '
+                f'aws s3 mv s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{_filename} '
                 f's3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/previous/{_filename} || '
-                f'echo "trouble copying file {_filename} in s3"',
-                
-                f'aws s3 rm s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{_filename} || '
-                f'echo "trouble removing file cur {_filename} in s3"',
-                
-                f'{base_cmd}/cur/{_filename} || echo "trouble uploading output file"'
+                f'echo "No existing file to move to previous for {_filename}"',
+
+                f'{base_cp_cmd}/cur/{_filename} || echo "trouble uploading output file"'
             ]
 
         return cmds
