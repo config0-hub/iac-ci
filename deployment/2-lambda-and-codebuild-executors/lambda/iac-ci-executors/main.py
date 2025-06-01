@@ -41,6 +41,7 @@ def handler(event, context):
             "body": "{"status": "success", ...}"
         }
     """
+
     # Initialize TF_Lambda with event parameters and run operations
     tf_lambda = TF_Lambda(**event)
     results = tf_lambda.run()

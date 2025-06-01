@@ -188,6 +188,8 @@ class WebhookProcess(PlatformReporter):
 
     def _chk_event(self):
         """
+        BACKUP EVENT VALIDATION - This check is now primarily performed in app.py
+        
         Check if the event type is valid. If it is a ping, simply return with
         a message indicating nothing was done. If the event type is an issue
         comment, make sure the action is "created". If the event is a basic
@@ -722,11 +724,15 @@ class WebhookProcess(PlatformReporter):
         updating the GitHub pull request with CI details. It handles various scenarios,
         including failures and successful processing, and returns True if the webhook
         was processed successfully, False otherwise.
+        
+        Note: Event type checking is now primarily performed in app.py, but we keep
+        a backup check here for safety during the transition.
         """
-        # Check trigger event
+        # Backup check for event type - primarily done in app.py now
         msg = self._chk_event()
 
         if msg is not True:
+            self.logger.debug(f"BACKUP EVENT CHECK FAILED: {msg} - This should have been caught in app.py")
             self.results["status"] = None
             self.results["initialized"] = None
             self.results["msg"] = msg

@@ -177,7 +177,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         else:
             return
 
-    def clean_pr_comments(self):
+    def clean_pr_comments(self,ignore_expire_epoch=True):
         """
         Cleans up outdated or irrelevant pull request comments in the GitHub repository.
 
@@ -191,8 +191,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if not hasattr(self, "github_repo") or not self.github_repo:
             return False
 
-        search_tag = "iac-ci:::status_comment"
-
+        search_tag = "#iac-ci:::status_comment"
         comments = self.github_repo.get_pr_comments(search_tag=search_tag)
 
         if not comments:
@@ -204,12 +203,22 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         for comment in comments:
             comment_id = comment["id"]
-            data_str = self.extract_from_substring(comment, search_tag)
+            data_str = self.extract_from_substring(comment['body'], search_tag)
+
             if not data_str:
                 continue
-            not_used, run_id, expire_epoch = data_str.split(" ")
 
-            if epoch_time > int(expire_epoch):
+            try:
+                parts = [part for part in data_str.strip().split() if part]
+                run_id = parts[1]
+                expire_epoch = parts[2]
+            except:
+                continue
+
+            if ignore_expire_epoch:
+                _to_delete.append(comment_id)
+                continue
+            elif epoch_time > int(expire_epoch):
                 _to_delete.append(comment_id)
                 continue
 
@@ -221,6 +230,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             return
 
         for comment_id in _to_delete:
+            self.logger.debug(f"deleting comment {comment_id}")
             self.github_repo.delete_pr_comment(comment_id)
 
     def get_github_token(self):

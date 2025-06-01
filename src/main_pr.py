@@ -687,22 +687,35 @@ class GitPr(PlatformReporter):
         }
 
         return True
-    
+
     def _exec_failure(self):
+        # Retrieve failure log from S3
         failure_log = self._fetch_s3_artifact(self.failure_s3_key)
         if not failure_log:
-            failure_log = f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {self.failure_s3_key}'
+            failure_log = f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {(self.failure_s3_key)}'
+
+        # Get current status comment information
         status_comment_info = self.get_cur_status_comment()
-        content = f'''## Failure Log
+
+        # Format markdown content with enhanced styling
+        content = f'''## ❌ Failure Log
+
 <details>
-    <summary>show</summary>
+<summary style="color: #d73a49; cursor: pointer; font-weight: bold;">Click to expand error details</summary>
+
+```
 {failure_log}
+```
 
 </details>
-        '''
+'''
+        self._clean_all_pr_comments()
+
+        # Update PR comment with new content
         new_comment = f'{status_comment_info["body"]}\n\n{content}'
-        self.github_repo.update_pr_comment(status_comment_info["id"],
-                                           new_comment)
+        self.github_repo.add_pr_comment(new_comment)
+
+        # Set notification links in results
         self.results["notify"] = {
             "links": [{"github comment": status_comment_info["html_url"]}]
         }

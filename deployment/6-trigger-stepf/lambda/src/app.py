@@ -1,4 +1,20 @@
 #!/usr/bin/env python
+'''
+Copyright (C) 2025 Gary Leong gary@config0.com
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+'''
 
 import os
 import json
@@ -16,6 +32,17 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 CI_APP_NAME = os.environ.get('CI_APP_NAME', 'iac_ci')
+
+# Basic events that are supported
+BASIC_EVENTS = [
+    "push",
+    "apply",
+    "pull_request",
+    "issue_comment"
+]
+
+# Valid actions for issue comments
+VALID_ACTIONS = ["check", "destroy", "apply"]
 
 def _write_execution_arn_to_db(search_str, execution_arn):
     dynamodb = boto3.resource('dynamodb')
@@ -44,13 +71,11 @@ def _write_execution_arn_to_db(search_str, execution_arn):
     return status
 
 def get_webhook_secret(trigger_id):
-
     dynamodb = boto3.resource('dynamodb')
     table_name = os.environ['DYNAMODB_TABLE_SETTINGS']
     table = dynamodb.Table(table_name)
 
     try:
-
         response = table.get_item(
             Key={'_id': trigger_id}
         )
@@ -121,6 +146,62 @@ def generate_random_string(length):
     random_string = ''.join(random.choice(characters) for _ in range(length))
     return random_string
 
+def check_event(headers, body):
+    """
+    Check if the event type is valid. If it is a ping, simply return with
+    a message indicating nothing was done. If the event type is an issue
+    comment, make sure the action is "created". If the event is a basic
+    event, return True. Otherwise, return a message indicating the type of
+    event must be one of the basic events.
+
+    This function is migrated from main_webhook.py to perform early validation
+    of webhook events before they are passed to the state machine.
+
+    Args:
+        headers (dict): The webhook request headers
+        body (str or dict): The webhook request body
+
+    Returns:
+        tuple: (status, message) - status is True if event is valid, False otherwise
+    """
+    user_agent = str(headers.get('User-Agent', '')).lower()
+
+    if "bitbucket" in user_agent:
+        event_type = str(headers.get('X-Event-Key', ''))
+    else:
+        event_type = headers.get('X-GitHub-Event', '')
+
+    if event_type == "ping":
+        return False, "event is ping - nothing done"
+
+    # Handle issue_comment action check
+    if event_type == "issue_comment":
+        try:
+            # Parse the event body if it's a string
+            payload = json.loads(body) if isinstance(body, str) else body
+            
+            # Check if the action is "created"
+            if payload.get("action") != "created":
+                return False, 'issue_comment needs to have action == "created"'
+                
+            # Check for valid commands in the comment
+            if 'comment' in payload and 'body' in payload['comment']:
+                comment = str(payload['comment']['body'].strip().split("\n")[0]).strip()
+                comment_params = [param.strip() for param in comment.split(" ")]
+                
+                # First word in comment should be a valid action
+                if comment_params[0] not in VALID_ACTIONS:
+                    return False, f'Command "{comment_params[0]}" not recognized. Must be one of: {VALID_ACTIONS}'
+            
+        except (json.JSONDecodeError, TypeError, KeyError, IndexError, AttributeError) as e:
+            # If we can't parse the event body or check the comment, we'll let the main webhook handler deal with it
+            logger.warning(f"Could not fully validate issue_comment: {str(e)}")
+
+    if event_type in BASIC_EVENTS:
+        return True, "Event type is valid"
+
+    return False, f'event = "{event_type}" must be one of {BASIC_EVENTS}'
+
 def handler(event, context):
     try:
         if not validate_github_webhook(event):
@@ -133,6 +214,33 @@ def handler(event, context):
             }
         
         logger.info("GitHub webhook validated successfully")
+        
+        # Check the event type
+        headers = event.get('headers', {})
+        body = event.get('body', '')
+        
+        # Perform event type check
+        event_valid, event_message = check_event(headers, body)
+        
+        if not event_valid:
+            logger.info(f"Event check result: {event_message}")
+            # If it's a ping, return a 200 OK but with a message
+            if "ping" in event_message:
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': event_message
+                    })
+                }
+            # For other invalid events, return a 400 Bad Request
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': event_message
+                })
+            }
+        
+        logger.info(f"Event check passed: {event_message}")
         
         search_str = generate_random_string(20)
 
