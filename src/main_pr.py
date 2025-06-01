@@ -17,12 +17,173 @@
 
 import os
 import boto3
+import re
 
 from iac_ci.common.utilities import get_hash_from_string
 from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.orders import OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import PlatformReporter
 
+
+def format_terraform_init(init_output):
+    """Format terraform init output for better readability"""
+    clean_output = strip_ansi_codes(init_output)
+    lines = clean_output.strip().split('\n')
+    
+    formatted = "\n"
+    
+    for line in lines:
+        if "Initializing the backend" in line:
+            formatted += "🔧 " + line + "\n"
+        elif "Initializing provider plugins" in line:
+            formatted += "🔌 " + line + "\n"
+        elif "- Installing" in line or "- Using" in line:
+            formatted += "  📦 " + line.strip("- ") + "\n"
+        elif "Terraform has been successfully initialized" in line:
+            formatted += "\n✅ " + line + "\n"
+        elif "Warning" in line.lower():
+            formatted += "⚠️ " + line + "\n"
+        elif "Error" in line.lower():
+            formatted += "❌ " + line + "\n"
+        else:
+            formatted += line + "\n"
+    
+    return formatted
+
+def format_terraform_validate(validate_output):
+    """Format terraform validate output with clear status"""
+    clean_output = strip_ansi_codes(validate_output)
+    
+    if "Success!" in clean_output or "configuration is valid" in clean_output:
+        return "\n✅ **Configuration is valid**\n"
+    else:
+        formatted = "\n❌ **Validation failed**\n\n"
+        formatted += "```\n"
+        formatted += clean_output
+        formatted += "\n```"
+        return formatted
+
+def format_terraform_plan(plan_output):
+    """
+    Format Terraform plan output for insertion into a GitHub collapsible details section.
+    
+    Args:
+        plan_output (str): Raw terraform plan output as a string
+    
+    Returns:
+        str: Formatted content ready for insertion into <details> section
+    """
+    # Clean up any remaining ANSI escape codes (just in case)
+    clean_output = strip_ansi_codes(plan_output)
+    
+    # Format the output for details section
+    formatted_output = "\n```diff\n"
+    formatted_output += clean_output
+    formatted_output += "\n```\n"
+    
+    # Extract summary information
+    summary = extract_plan_summary(clean_output)
+    if summary:
+        formatted_output += "\n**📊 Summary:**\n"
+        formatted_output += f"- ✅ **{summary['add']} to add**\n"
+        formatted_output += f"- 🔄 **{summary['change']} to change**\n"
+        formatted_output += f"- ❌ **{summary['destroy']} to destroy**"
+    
+    return formatted_output
+
+def format_tfsec_output(tfsec_output):
+    """Format tfsec output with severity indicators and summary"""
+    clean_output = strip_ansi_codes(tfsec_output)
+    
+    formatted = "\n🔒 **Security Scan Results**\n\n"
+    
+    # Count issues by severity
+    high_count = clean_output.count("HIGH")
+    medium_count = clean_output.count("MEDIUM") 
+    low_count = clean_output.count("LOW")
+    
+    if high_count == 0 and medium_count == 0 and low_count == 0:
+        if "No problems detected" in clean_output or len(clean_output.strip()) == 0:
+            formatted += "✅ **No security issues found!**\n"
+            return formatted
+    
+    # Summary
+    formatted += "**Summary:**\n"
+    if high_count > 0:
+        formatted += f"- 🔴 **{high_count} HIGH** severity issues\n"
+    if medium_count > 0:
+        formatted += f"- 🟡 **{medium_count} MEDIUM** severity issues\n"
+    if low_count > 0:
+        formatted += f"- 🔵 **{low_count} LOW** severity issues\n"
+    
+    formatted += "\n```\n"
+    formatted += clean_output
+    formatted += "\n```"
+    
+    return formatted
+
+def format_infracost_output(infracost_output):
+    """Format infracost output with cost summary"""
+    clean_output = strip_ansi_codes(infracost_output)
+    
+    formatted = "\n💰 **Cost Analysis**\n\n"
+    
+    # Look for cost summary patterns
+    if "Monthly cost" in clean_output or "Total monthly cost" in clean_output:
+        lines = clean_output.split('\n')
+        summary_lines = []
+        
+        for line in lines:
+            if "Monthly cost" in line or "Total monthly cost" in line:
+                summary_lines.append(f"💸 {line.strip()}")
+            elif "compared to" in line.lower():
+                summary_lines.append(f"📊 {line.strip()}")
+        
+        if summary_lines:
+            formatted += "**Summary:**\n"
+            for summary in summary_lines:
+                formatted += f"- {summary}\n"
+            formatted += "\n"
+    
+    formatted += "```\n"
+    formatted += clean_output
+    formatted += "\n```"
+    
+    return formatted
+
+def strip_ansi_codes(text):
+    """
+    Remove ANSI escape codes from text.
+    
+    Args:
+        text (str): Text that may contain ANSI codes
+        
+    Returns:
+        str: Text with ANSI codes removed
+    """
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+def extract_plan_summary(plan_output):
+    """
+    Extract the plan summary (add/change/destroy counts) from terraform output.
+    
+    Args:
+        plan_output (str): Raw terraform plan output
+        
+    Returns:
+        dict: Dictionary with 'add', 'change', 'destroy' counts or None if not found
+    """
+    pattern = r"Plan:\s+(\d+)\s+to\s+add,\s+(\d+)\s+to\s+change,\s+(\d+)\s+to\s+destroy"
+    match = re.search(pattern, plan_output)
+    
+    if match:
+        return {
+            'add': match.group(1),
+            'change': match.group(2),
+            'destroy': match.group(3)
+        }
+    return None
 
 class GitPr(PlatformReporter):
 
@@ -42,6 +203,10 @@ class GitPr(PlatformReporter):
 
         self.s3 = boto3.resource('s3')
         self.search_tag = None
+        self.failure_s3_key = None
+
+        if kwargs.get("failure_s3_key"):
+            self.failure_s3_key = kwargs["failure_s3_key"]
 
     def _get_s3_artifact(self, suffix_key):
         """
@@ -54,17 +219,18 @@ class GitPr(PlatformReporter):
                               "cur",
                               suffix_key)
 
+        return self._fetch_s3_artifact(s3_key)
+
+    def _fetch_s3_artifact(self, s3_key):
+
         file_info = self.s3_file.exists_and_get(format="list",
                                                 s3_bucket=self.tmp_bucket,
                                                 s3_key=s3_key,
                                                 stream=True)
 
         if file_info["status"] is False:
-            if file_info["failed_message"]:
-                self.logger.error(file_info["failed_message"])
-                return file_info["failed_message"]
-            else:
-                return f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}'
+            self.logger.debug(f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
+            return False
 
         self.logger.debug(f'retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
 
@@ -143,49 +309,71 @@ class GitPr(PlatformReporter):
         retrieved from corresponding S3 artifacts and is enclosed in collapsible
         sections for better readability.
 
+        Sections are only added if their content is not False.
+
         :return: A markdown formatted string with Terraform process details.
         """
-        content = f'''## Terraform
+        content = "## 🏗️ Terraform\n\n"
+        
+        # Get section contents
+        tf_init = self._get_tfinit()
+        tf_validate = self._get_tfvalidate()
+        tf_plan = self._get_tfplan()
 
-__Initialization__
+        # Add Initialization section if content exists
+        if tf_init:
+            content += f'''### 1️⃣ Initialize
 
 <details>
-    <summary>show</summary>
-{self._get_tfinit()}
+    <summary>show details</summary>
+{format_terraform_init(tf_init)}
     
 </details>
 
-__Validation__
+'''
+        
+        # Add Validation section if content exists
+        if tf_validate:
+            content += f'''### 2️⃣ Validate
 
 <details>
-    <summary>show</summary>
-{self._get_tfvalidate()}
+    <summary>show details</summary>
+{format_terraform_validate(tf_validate)}
     
 </details>
 
-__Plan__
+'''
+        
+        # Add Plan section if content exists
+        if tf_plan:
+            content += f'''### 3️⃣ Plan
 
 <details>
-    <summary>show</summary>
-{self._get_tfplan()}
+    <summary>show details</summary>
+{format_terraform_plan(tf_plan)}
     
 </details>
-        '''
-    
+'''
+        
         return content
 
     def _get_tfsec_md(self):
         """
         Generates a markdown string that summarizes the TFSec output:
-        It retrieves the TFSec output from an S3 artifact and encloses it
-        in a collapsible section for better readability.
+        It retrieves the TFSec output from an S3 artifact and formats it
+        with severity indicators and summary.
 
         :return: A markdown formatted string with TFSec output.
         """
-        content = f'''## TFSec
+        _log = self._get_tfsec()
+
+        if not _log:
+            return False
+
+        content = f'''### 4️⃣ Security Scan
 <details>
-    <summary>show</summary>
-{self._get_tfsec()}
+    <summary>show details</summary>
+{format_tfsec_output(_log)}
     
 </details>
         '''
@@ -194,15 +382,19 @@ __Plan__
     def _get_infracost_md(self):
         """
         Generates a markdown string that summarizes the Infracost output:
-        It retrieves the Infracost output from an S3 artifact and encloses it
-        in a collapsible section for better readability.
+        It retrieves the Infracost output from an S3 artifact and formats it
+        with cost analysis details.
 
         :return: A markdown formatted string with Infracost output.
         """
-        content = f'''## Infracost
+        _log = self._get_infracost()
+        if not _log:
+            return False
+
+        content = f'''### 5️⃣ Cost Analysis
 <details>
-    <summary>show</summary>
-{self._get_infracost()}
+    <summary>show details</summary>
+{format_infracost_output(_log)}
     
 </details>
         '''
@@ -451,6 +643,7 @@ __Plan__
 
         :return: True if execution is successful.
         """
+
         self._init_vars()
         self._set_order()
 
@@ -460,16 +653,19 @@ __Plan__
                                       token=self.github_token,
                                       owner=self.repo_owner)
 
-        pr_info = self.eval_pr()
-
-        self.results["notify"] = {
-            "links": [{"github comment": pr_info["url"]}]
-        }
-
         # successful at this point
         self.results["update"] = True
         self.results["close"] = True
-        self.results["status"] = "successful"
+
+        if self.failure_s3_key:
+            status = self._exec_failure()
+        else:
+            status = self._exec_successful()
+
+        if status:
+            self.results["status"] = "successful"
+        else:
+            self.results["status"] = "failure"
 
         summary_msg = f"# Triggered \n# trigger_id: {self.trigger_id} \n# iac_ci_id: {self.iac_ci_id}\n"
 
@@ -481,5 +677,34 @@ __Plan__
         self.insert_to_return()
         self.finalize_order()
         self._save_run_info()
+
+        return True
+
+    def _exec_successful(self):
+        pr_info = self.eval_pr()
+        self.results["notify"] = {
+            "links": [{"github comment": pr_info["url"]}]
+        }
+
+        return True
+    
+    def _exec_failure(self):
+        failure_log = self._fetch_s3_artifact(self.failure_s3_key)
+        if not failure_log:
+            failure_log = f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {self.failure_s3_key}'
+        status_comment_info = self.get_cur_status_comment()
+        content = f'''## Failure Log
+<details>
+    <summary>show</summary>
+{failure_log}
+
+</details>
+        '''
+        new_comment = f'{status_comment_info["body"]}\n\n{content}'
+        self.github_repo.update_pr_comment(status_comment_info["id"],
+                                           new_comment)
+        self.results["notify"] = {
+            "links": [{"github comment": status_comment_info["html_url"]}]
+        }
 
         return True

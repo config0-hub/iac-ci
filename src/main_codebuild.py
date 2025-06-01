@@ -11,7 +11,7 @@ License: GNU General Public License v3.0
 
 import os
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.orders import OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import PlatformReporter
 from iac_ci.helper.resource.codebuild import Codebuild
 
 

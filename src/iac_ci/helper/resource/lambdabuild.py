@@ -205,19 +205,24 @@ class Lambdabuild(LambdaParams):
         Raises:
             ValueError: If method is not one of create/validate/ci/pre-create/check/apply/destroy
         """
-        cmds = self.tfsec_cmds.get_all_cmds()
-        cmds.extend(self.infracost_cmds.get_all_cmds())
+        tfsec_cmds = self.tfsec_cmds.get_all_cmds()
+        infracost_cmds = self.infracost_cmds.get_all_cmds()
 
         if self.method in ["create", "apply"]:
             cmds = self.tfcmds.get_tf_apply()
-        elif self.method == "ci":
+        elif self.method in [ "ci", "check"]:
+            cmds = self.tfsec_cmds.backup_s3_file(suffix="out")
+            cmds.extend(self.tfsec_cmds.backup_s3_file(suffix="json"))
+            cmds.extend(self.infracost_cmds.backup_s3_file(suffix="out"))
+            cmds.extend(self.infracost_cmds.backup_s3_file(suffix="json"))
+            cmds.extend(self.tfcmds.backup_cmds_tf())
             cmds.extend(self.tfcmds.get_tf_ci())
-        elif self.method == "check":
-            cmds.extend(self.tfcmds.get_tf_ci())
+            cmds.extend(tfsec_cmds)
+            cmds.extend(infracost_cmds)
         elif self.method == "pre-create":
-            cmds.extend(self.tfcmds.get_tf_pre_create())
+            cmds = self.tfcmds.get_tf_pre_create()
         elif self.method == "validate":
-            cmds.extend(self.tfcmds.get_tf_chk_drift())
+            cmds = self.tfcmds.get_tf_chk_drift()
         elif self.method == "destroy":
             cmds = self.tfcmds.get_tf_destroy()
         else:

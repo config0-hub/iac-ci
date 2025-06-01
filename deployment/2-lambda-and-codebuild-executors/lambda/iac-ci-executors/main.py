@@ -41,12 +41,6 @@ def handler(event, context):
             "body": "{"status": "success", ...}"
         }
     """
-    # TODO - remove later
-    # We are enabling the printing of log
-    # but can remove this later and set it on the
-    # lambda function if need be
-    os.environ["IAC_CI_PRINT_LOG"] = "True"
-
     # Initialize TF_Lambda with event parameters and run operations
     tf_lambda = TF_Lambda(**event)
     results = tf_lambda.run()

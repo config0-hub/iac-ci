@@ -23,7 +23,8 @@ from time import time
 from time import sleep
 from copy import deepcopy
 
-from iac_ci.common.orders import new_run_id, OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import new_run_id
+from iac_ci.common.orders import PlatformReporter
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.github_pr import GitHubRepo
@@ -806,6 +807,9 @@ class WebhookProcess(PlatformReporter):
         self.add_log(f"# commit_hash: {self.webhook_info['commit_hash']}")
         self.add_log("#" * 32)
 
+        if self.webhook_info["event_type"] != "push":
+            self._add_comment_to_github()
+
         # Save run info
         self.finalize_order()
         self._save_run_info()
@@ -820,8 +824,5 @@ class WebhookProcess(PlatformReporter):
         }
 
         self.insert_to_return()
-
-        if self.webhook_info["event_type"] != "push":
-            self._add_comment_to_github()
 
         return True

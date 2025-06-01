@@ -223,8 +223,10 @@ class TF_Lambda(object):
                 cmds = None
 
             if not cmds:
+                print(f"no cmds found for phase {phase}")
                 continue
 
+            print(f"cmds found for phase {phase}")
             results = shell_to_s3.exec_cmds(cmds)
             if results.get("status") is False:
                 return results

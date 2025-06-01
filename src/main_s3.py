@@ -12,6 +12,7 @@ import shutil
 import os
 import boto3
 import base64
+import traceback
 from botocore.exceptions import ClientError
 
 from iac_ci.common.serialization import b64_encode
@@ -21,7 +22,7 @@ from iac_ci.common.utilities import find_filename
 from iac_ci.common.utilities import id_generator
 from iac_ci.common.utilities import rm_rf
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.orders import OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import PlatformReporter
 
 
 class PkgCodeToS3(PlatformReporter):
@@ -89,11 +90,8 @@ class PkgCodeToS3(PlatformReporter):
         private_key_hash = os.environ.get("PRIVATE_KEY_HASH")
 
         if not private_key_hash and self.ssm_ssh_key:
-            try:
-                _ssm_info = self.ssm.get_parameter(Name=self.ssm_ssh_key, WithDecryption=True)
-                private_key_hash = _ssm_info["Parameter"]["Value"]
-            except ClientError as e:
-                raise Exception(f"Failed to retrieve private key from SSM: {str(e)}")
+            _ssm_info = self.ssm.get_parameter(Name=self.ssm_ssh_key, WithDecryption=True)
+            private_key_hash = _ssm_info["Parameter"]["Value"]
 
         if not private_key_hash:
             failed_message = "private_key_hash not found"
@@ -224,14 +222,11 @@ class PkgCodeToS3(PlatformReporter):
         """
         os.chdir(self.archive_dir)
 
-        try:
-            shutil.make_archive(
-                f'/tmp/{self.commit_hash}',
-                'zip',
-                verbose=True
-            )
-        except (shutil.Error, OSError) as e:
-            raise Exception(f"Failed to create archive: {str(e)}")
+        shutil.make_archive(
+            f'/tmp/{self.commit_hash}',
+            'zip',
+            verbose=True
+        )
 
         # for some reason, if set self.s3_key and insert it here
         # the upload to s3 is an ascii file
@@ -260,12 +255,7 @@ class PkgCodeToS3(PlatformReporter):
         """
         self.run_info["remote_src_bucket"] = self.remote_src_bucket
         self.run_info["remote_src_bucket_key"] = self.remote_src_bucket_key
-
-        try:
-            self.db.table_runs.insert(self.run_info)
-        except Exception as e:
-            raise Exception(f"Failed to save run info to DynamoDB: {str(e)}")
-
+        self.db.table_runs.insert(self.run_info)
         msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"
         self.add_log(msg)
 
@@ -292,9 +282,26 @@ class PkgCodeToS3(PlatformReporter):
             "remote_src_bucket_key": self.remote_src_bucket_key
         }
 
-        self._write_private_key()
-        self._fetch_code()
-        self._archive_code()
+        try:
+            self._write_private_key()
+            self._fetch_code()
+            self._archive_code()
+        except:
+            failed_message = traceback.format_exc()
+            failure_s3_key = id_generator()
+            failed_file = os.path.join("/tmp", failure_s3_key)
+            with open(failed_file, 'w') as _file:
+                _file.write(failed_message)
+
+            self.s3_file.insert(
+                s3_bucket=self.tmp_bucket,
+                s3_key=failure_s3_key,
+                srcfile=failed_file
+            )
+            rm_rf(failed_file)
+            self.results["failure_s3_key"] = failure_s3_key
+            self.logger.error(f'failure log uploaded to "{failure_s3_key}"')
+            raise Exception(failed_message)
 
         # set the iac platform if explicitly provided in the build_enva_vars
         build_env_vars = self._get_build_env_vars_frm_file()

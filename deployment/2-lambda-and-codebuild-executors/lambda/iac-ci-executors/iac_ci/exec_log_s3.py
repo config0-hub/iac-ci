@@ -188,7 +188,8 @@ class ShellOutToS3:
         epoch_time = str(int(time()))
         time_elapse = int(epoch_time) - self.init_time
         msg = f'# Lambda times # time_elapse: {str(time_elapse)} init_time: {str(self.init_time)} current_time: {str(epoch_time)} build_timeout: {str(self.build_timeout)}'
-        print(f'DEBUG: {msg}')
+        if os.environ.get("DEBUG_IAC_CI"):
+            print(f'DEBUG: {msg}')
         if include_time:
             append_to_log(self.log_file_path, msg)
         try:
@@ -198,8 +199,8 @@ class ShellOutToS3:
             msg = f"{epoch_time}: Log file uploaded to s3://{self.bucket_name}/{self.bucket_key}"
         except Exception as e:
             msg = f"{epoch_time}: Log file failed to upload log file to S3: {e}"
-        print(msg)
-
+        if os.environ.get("DEBUG_IAC_CI"):
+            print(msg)
     def exec_cmds(self, commands, heartbeat_interval=60, debug=None):
         """
         Execute a list of commands.
@@ -218,7 +219,8 @@ class ShellOutToS3:
 
         for key in self.env_vars:
             _log = f'env_vars: add env var key "{key}" to execute commands'
-            print(_log)
+            if os.environ.get("DEBUG_IAC_CI"):
+                print(_log)
             append_to_log(self.log_file_path, _log)
 
         env = os.environ.copy()

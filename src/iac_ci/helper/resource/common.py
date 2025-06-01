@@ -178,7 +178,32 @@ class TFAppHelper:
 
         return cmds
 
-    def local_output_to_s3(self, srcfile=None, suffix=None, last_apply=None):
+    def _get_srcfilename(self, srcfile=None, suffix=None):
+
+        if not srcfile and suffix:
+            srcfile = f'{self.tmp_base_output_file}.{suffix}'
+
+        if not srcfile:
+            raise ValueError("srcfile needs to be determined to upload to s3")
+
+        _filename = os.path.basename(srcfile)
+
+        return srcfile,_filename
+
+    def backup_s3_file(self, srcfile=None, suffix=None):
+
+        filename = self._get_srcfilename(srcfile=srcfile, suffix=suffix)[1]
+
+        # Check if file exists
+        check_cmd = f'if aws s3 ls s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{filename} > /dev/null 2>&1; then '
+
+        # If exists, move it and report success/failure
+        mv_cmd = f'(aws s3 mv s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{filename} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/previous/{filename}) || echo ""; fi'
+
+        # Combine all parts into one command
+        return [ check_cmd + mv_cmd ]
+
+    def wrapper_cmds_to_s3(self, cmds, srcfile=None, suffix=None, last_apply=None):
         """
         Generate commands to copy local files to S3.
 
@@ -193,25 +218,18 @@ class TFAppHelper:
         Raises:
             ValueError: If srcfile cannot be determined
         """
-        if not srcfile and suffix:
-            srcfile = f'{self.tmp_base_output_file}.{suffix}'
 
-        if not srcfile:
-            raise ValueError("srcfile needs to be determined to upload to s3")
-
-        _filename = os.path.basename(srcfile)
+        srcfile,_filename = self._get_srcfilename(srcfile=srcfile, suffix=suffix)
         base_cp_cmd = f'aws s3 cp {srcfile} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID'
 
-        if last_apply:
-            cmds = f'{base_cp_cmd}/applied/{_filename} || echo "trouble uploading output file"'
-        else:
-            cmds = [
-                f'aws s3 mv s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{_filename} '
-                f's3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/previous/{_filename} || '
-                f'echo "No existing file to move to previous for {_filename}"',
+        if not last_apply:
+            init_cmd = self.backup_s3_file(srcfile, suffix)
+            cmds.insert(0,init_cmd)
 
-                f'{base_cp_cmd}/cur/{_filename} || echo "trouble uploading output file"'
-            ]
+        if last_apply:
+            cmds.append(f'{base_cp_cmd}/applied/{_filename} || echo "trouble uploading output file"')
+        else:
+            cmds.append(f'{base_cp_cmd}/cur/{_filename} || echo "trouble uploading output file"')
 
         return cmds
 

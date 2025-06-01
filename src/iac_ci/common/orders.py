@@ -45,7 +45,7 @@ def new_run_id(**kwargs):
     return f"{id_generator()[:6]}{checkin}"
 
 
-class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
+class PlatformReporter(Notification, CreateTempParamStoreEntry):
     """
     Helper class for managing orders and stages in the IAC CI pipeline.
     Provides functionality for tracking, reporting, and managing the pipeline execution.
@@ -53,7 +53,7 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
 
     def __init__(self, **kwargs):
         """
-        Initialize the OrdersStagesHelper with the provided parameters.
+        Initialize the PlatformReporter with the provided parameters.
         
         Args:
             **kwargs: Keyword arguments including iac_ci_id, run_id, trigger_id,
@@ -61,7 +61,7 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
         """
         self.start_time = int(time())
 
-        self.classname = "Config0Reporter"
+        self.classname = "PlatformReporter"
         self.logger = IaCLogger(self.classname)
         self.s3_file = S3FileBoto3()
 
@@ -328,10 +328,13 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
 
         return content
 
-    def clean_status_comment_id(self):
-
+    def get_cur_status_comment(self):
         github_repo = self._set_up_github_conn_to_repo()
+        status_comment_id = self.get_status_comment_id()
 
+        return github_repo.get_comment_by_id(status_comment_id)
+
+    def get_status_comment_id(self):
         try:
             status_comment_id = self.run_info["status_comment_id"]
         except KeyError as e:
@@ -340,6 +343,13 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
         except Exception as e:
             self.logger.debug(f"Error retrieving status comment ID: {str(e)}")
             status_comment_id = None
+
+        return status_comment_id
+
+    def clean_status_comment_id(self):
+
+        github_repo = self._set_up_github_conn_to_repo()
+        status_comment_id = self.get_status_comment_id()
 
         if status_comment_id:
             try:
@@ -365,7 +375,7 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
                           token=self.github_token,
                           owner=owner)
 
-    def finalize_pr(self,status):
+    def finalize_build_pr(self,status):
         """
         Finalizes the PR by adding a comment to the PR with the CodeBuild console and execution details links.
 
@@ -456,6 +466,9 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
                 "failed_message" explaining the reason.
         """
         if not self.trigger_id and (self.build_id or self.run_id):
+            self._load_run_info()
+
+        if not self.run_info and not self.webhook_info and self.run_id and self.trigger_id:
             self._load_run_info()
 
         try:
@@ -875,7 +888,7 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
         if self.run_id and not self.results.get("run_id"):
             self.results["run_id"] = self.run_id
 
-    def finalize_order(self):
+    def finalize_order(self,ignore_status=False):
         """
         Finalizes an order.
 
@@ -892,18 +905,21 @@ class OrdersStagesHelper(Notification, CreateTempParamStoreEntry):
         self.order["stop_time"] = str(stop_time)
         self.order["checkin"] = stop_time
         self.order["total_time"] = stop_time - self.start_time
-
         self.order["total_time"] = int(max(self.order["total_time"], 1))
 
-        if self.results.get("status") in ["timed_out"]:
-            msg = f"TIMED_OUT: {self.order['human_description']}"
-            self.order["status"] = "timed_out"
-        elif self.results.get("status") in ['failed', False, "false", "timed_out"]:
-            msg = f"FAILED: {self.order['human_description']}"
-            self.order["status"] = "failed"
-        else:
+        if ignore_status:
             msg = f"SUCCESS: {self.order['human_description']}"
             self.order["status"] = "completed"
+        else:
+            if self.results.get("status") in ["timed_out"]:
+                msg = f"TIMED_OUT: {self.order['human_description']}"
+                self.order["status"] = "timed_out"
+            elif self.results.get("status") in ['failed', False, "false", "timed_out"]:
+                msg = f"FAILED: {self.order['human_description']}"
+                self.order["status"] = "failed"
+            else:
+                msg = f"SUCCESS: {self.order['human_description']}"
+                self.order["status"] = "completed"
 
         self.add_log("\n")
         self.add_log(msg)

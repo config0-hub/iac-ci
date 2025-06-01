@@ -79,12 +79,12 @@ class TFSecHelper(TFAppHelper):
             list: Commands for running TFSec checks and storing results
         """
         cmds = [
-            f'({self.base_cmd} --no-color --out {self.tmp_base_output_file}.out | tee -a /tmp/$STATEFUL_ID.log) || echo "tfsec check failed"',
-            f'({self.base_cmd} --no-color --format json --out {self.tmp_base_output_file}.json) || echo "tfsec check with json output failed"'
+            f'({self.base_cmd} --no-color --out {self.tmp_base_output_file}.out | tee -a /tmp/$STATEFUL_ID.log) || echo "tfsec check failed"'
         ]
+        self.wrapper_cmds_to_s3(cmds, suffix="json", last_apply=None)
 
-        cmds.extend(self.local_output_to_s3(suffix="json", last_apply=None))
-        cmds.extend(self.local_output_to_s3(suffix="out", last_apply=None))
+        cmds.append(f'({self.base_cmd} --no-color --format json --out {self.tmp_base_output_file}.json) || echo "tfsec check with json output failed"')
+        self.wrapper_cmds_to_s3(cmds, suffix="out", last_apply=None)
 
         return cmds
 

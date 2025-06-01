@@ -24,7 +24,7 @@ from time import sleep, time
 import boto3
 from botocore.exceptions import ClientError
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.orders import OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import PlatformReporter
 
 class CheckBuild(PlatformReporter):
     """
@@ -378,7 +378,7 @@ class CheckBuild(PlatformReporter):
         self.results["close"] = True
         self.results["update"] = True
 
-        self.finalize_pr(status=self.results.get("status"))
+        self.finalize_build_pr(status=self.results.get("status"))
 
         # we only set order once we are completely done
         self._set_order()

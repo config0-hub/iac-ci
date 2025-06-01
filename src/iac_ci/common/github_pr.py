@@ -109,6 +109,42 @@ class GitHubRepo:
         self.url_reviews = f'https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls/{self.pr_number}/reviews'
         self.url_issues_comments = f'https://api.github.com/repos/{self.owner}/{self.repo_name}/issues/{self.pr_number}/comments'
         self.url_pr_comment = f'https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls/{self.pr_number}/comments'
+        self.url_pr_comment_by_id = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls/comments"
+        self.url_comment_by_id = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/issues/comments"
+
+    def get_comment_by_id(self, comment_id, review_comment=False):
+        """
+        Retrieves a GitHub comment directly by its unique comment ID.
+
+        Args:
+            comment_id (int): The unique ID of the GitHub comment.
+            review_comment (bool): True if it's a line-specific PR review comment,
+                                   False if it's a general PR comment.
+
+        Returns:
+            dict: Comment data if successful.
+            None: If comment not found or other errors occur.
+        """
+        self._set_pr_urls()
+
+        if review_comment:
+            url = f"{self.url_pr_comment_by_id}/{comment_id}"
+        else:
+            url = f"{self.url_comment_by_id}/{comment_id}"
+
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code == 200:
+            self.logger.debug(f"Successfully fetched comment ID: {comment_id}")
+            return response.json()
+
+        elif response.status_code == 404:
+            self.logger.warn(f"Comment with ID {comment_id} not found.")
+            return None
+
+        else:
+            self.logger.error(f"Error fetching comment ID {comment_id}: {response.status_code}, {response.text}")
+            return None
 
     def get_pr_comments(self, use_default_search_tag=True, search_tag=None):
         """
@@ -350,6 +386,7 @@ class GitHubRepo:
 
         md5_hash = hashlib.md5(str(encoded_comment).encode()).hexdigest()
         return encoded_comment, md5_hash
+
 
     def update_pr_comment(self, comment_id, comment):
         """

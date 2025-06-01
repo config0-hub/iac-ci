@@ -24,7 +24,7 @@ import traceback
 import boto3
 
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.orders import OrdersStagesHelper as PlatformReporter
+from iac_ci.common.orders import PlatformReporter
 from iac_ci.helper.resource.lambdabuild import Lambdabuild
 from iac_ci.common.utilities import id_generator2
 

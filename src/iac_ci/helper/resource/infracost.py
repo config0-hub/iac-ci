@@ -67,7 +67,6 @@ class TFInfracostHelper(TFAppHelper):
         Returns:
             list: A list of shell commands to install the Infracost binary.
         """
-        # infracost-linux-amd64.tar.gz
         arch_with_hyphen = self.arch.replace("_", "-")
         dl_file = f'{self.binary}-{arch_with_hyphen}'
 
@@ -87,12 +86,12 @@ class TFInfracostHelper(TFAppHelper):
         """
         cmds = [
             f'echo "executing INFRACOST"',
-            f'({self.base_cmd} --no-color breakdown --path . --format json --out-file {self.tmp_base_output_file}.json) || (echo "WARNING: looks like INFRACOST failed")',
             f'({self.base_cmd} --no-color breakdown --path . --out-file {self.tmp_base_output_file}.out && cat {self.tmp_base_output_file}.out | tee -a /tmp/$STATEFUL_ID.log ) || (echo "WARNING: looks like INFRACOST failed")'
         ]
+        self.wrapper_cmds_to_s3(cmds, suffix="out", last_apply=None)
 
-        cmds.extend(self.local_output_to_s3(suffix="json", last_apply=None))
-        cmds.extend(self.local_output_to_s3(suffix="out", last_apply=None))
+        cmds.append(f'({self.base_cmd} --no-color breakdown --path . --format json --out-file {self.tmp_base_output_file}.json) || (echo "WARNING: looks like INFRACOST failed")')
+        self.wrapper_cmds_to_s3(cmds, suffix="json", last_apply=None)
 
         return cmds
 

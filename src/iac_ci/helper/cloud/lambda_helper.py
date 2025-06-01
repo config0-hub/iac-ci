@@ -78,23 +78,28 @@ class LambdaHandler:
         return init_msg
 
 
-def return_thru_lambda(results):
+def return_thru_lambda(sresults):
     """
-    Format results for Lambda function return.
+    Format sresults for Lambda function return.
     
     Args:
-        results (dict): Results to format for Lambda return
+        sresults (dict): Results to format for Lambda return
     
     Returns:
         dict: Formatted response with statusCode and body
     """
     if os.environ.get("DEBUG_IAC_CI"):
         print("*" * 32)
-        print(json.dumps(results, indent=4))
+        print(json.dumps(sresults, indent=4))
         print("*" * 32)
 
-    return {
+    results = {
         'statusCode': 200,
-        'continue': results["continue"],
-        'body': json.dumps(results)
+        'continue': sresults["continue"],
+        'body': json.dumps(sresults)
     }
+
+    if sresults.get("failure_s3_key"):
+        results["failure_s3_key"] = sresults["failure_s3_key"]
+
+    return results
