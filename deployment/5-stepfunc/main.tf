@@ -102,23 +102,50 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
   "Comment": "The state machine processes webhook from code repo, executes codebuild, and checks results",
   "StartAt": "ProcessWebhook",
   "States": {
-    "ProcessWebhook": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.process_webhook}",
-      "Next": "ChkProcessWebhook"
+    "CheckCodebuild": {
+      "InputPath": "$.body",
+      "Next": "ChkCheckCodebuild",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-check-codebuild",
+      "Type": "Task"
+    },
+    "ChkCheckCodebuild": {
+      "Choices": [
+        {
+          "BooleanEquals": true,
+          "Next": "CheckCodebuild",
+          "Variable": "$.continue"
+        }
+      ],
+      "Default": "Done",
+      "Type": "Choice"
+    },
+    "ChkPkgCodeToS3": {
+      "Choices": [
+        {
+          "IsPresent": true,
+          "Next": "EvaluatePr",
+          "Variable": "$.failure_s3_key"
+        },
+        {
+          "BooleanEquals": true,
+          "Next": "TriggerLambda",
+          "Variable": "$.continue"
+        }
+      ],
+      "Default": "Done",
+      "Type": "Choice"
     },
     "ChkProcessWebhook": {
-      "Type": "Choice",
       "Choices": [
         {
           "And": [
             {
-              "Variable": "$.apply",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.apply"
             },
             {
-              "Variable": "$.continue",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.continue"
             }
           ],
           "Next": "TriggerCodebuild"
@@ -126,12 +153,12 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
         {
           "And": [
             {
-              "Variable": "$.destroy",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.destroy"
             },
             {
-              "Variable": "$.continue",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.continue"
             }
           ],
           "Next": "TriggerCodebuild"
@@ -139,102 +166,80 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
         {
           "And": [
             {
-              "Variable": "$.check",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.check"
             },
             {
-              "Variable": "$.continue",
-              "BooleanEquals": true
+              "BooleanEquals": true,
+              "Variable": "$.continue"
             }
           ],
           "Next": "PkgCodeToS3"
         }
       ],
-      "Default": "Done"
-    },
-    "PkgCodeToS3": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.pkgcode_to_s3}",
-      "Next": "ChkPkgCodeToS3",
-      "InputPath": "$.body"
-    },
-    "ChkPkgCodeToS3": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.continue",
-          "BooleanEquals": true,
-          "Next": "TriggerLambda"
-        }
-      ],
-      "Default": "Done"
-    },
-    "TriggerLambda": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.trigger_lambda}",
-      "Next": "ChkTriggerLambda",
-      "InputPath": "$.body"
-    },
-    "ChkTriggerLambda": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.continue",
-          "BooleanEquals": true,
-          "Next": "EvaluatePr"
-        }
-      ],
-      "Default": "Done"
-    },
-    "EvaluatePr": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.update_pr}",
-      "InputPath": "$.body",
-      "End": true
-    },
-    "TriggerCodebuild": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.trigger_codebuild}",
-      "Next": "ChkTriggerCodebuild",
-      "InputPath": "$.body"
+      "Default": "Done",
+      "Type": "Choice"
     },
     "ChkTriggerCodebuild": {
-      "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.continue",
           "BooleanEquals": true,
-          "Next": "WaitCodebuildCheck"
+          "Next": "WaitCodebuildCheck",
+          "Variable": "$.continue"
         }
       ],
-      "Default": "Done"
+      "Default": "Done",
+      "Type": "Choice"
     },
-    "WaitCodebuildCheck": {
-      "Type": "Wait",
-      "Seconds": 30,
-      "Next": "CheckCodebuild",
-      "Comment": "Wait to Check CodeBuild completion"
-    },
-    "CheckCodebuild": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:${var.app_name}-${var.check_codebuild}",
-      "Next": "ChkCheckCodebuild",
-      "InputPath": "$.body"
-    },
-    "ChkCheckCodebuild": {
-      "Type": "Choice",
+    "ChkTriggerLambda": {
       "Choices": [
         {
-          "Variable": "$.continue",
           "BooleanEquals": true,
-          "Next": "CheckCodebuild"
+          "Next": "EvaluatePr",
+          "Variable": "$.continue"
         }
       ],
-      "Default": "Done"
+      "Default": "Done",
+      "Type": "Choice"
     },
     "Done": {
-      "Type": "Pass",
-      "End": true
+      "End": true,
+      "Type": "Pass"
+    },
+    "EvaluatePr": {
+      "End": true,
+      "InputPath": "$.body",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-update-pr",
+      "Type": "Task"
+    },
+    "PkgCodeToS3": {
+      "InputPath": "$.body",
+      "Next": "ChkPkgCodeToS3",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-pkgcode-to-s3",
+      "Type": "Task"
+    },
+    "ProcessWebhook": {
+      "Next": "ChkProcessWebhook",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-process-webhook",
+      "Type": "Task"
+    },
+    "TriggerCodebuild": {
+      "InputPath": "$.body",
+      "Next": "ChkTriggerCodebuild",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-codebuild",
+      "Type": "Task"
+    },
+    "TriggerLambda": {
+      "InputPath": "$.body",
+      "Next": "ChkTriggerLambda",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-lambda",
+      "Type": "Task"
+    },
+    "WaitCodebuildCheck": {
+      "Comment": "Wait to Check CodeBuild completion",
+      "Next": "CheckCodebuild",
+      "Seconds": 30,
+      "Type": "Wait"
     }
   }
 }

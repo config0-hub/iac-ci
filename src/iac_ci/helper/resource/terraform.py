@@ -151,19 +151,19 @@ class TFCmdOnAWS(TFAppHelper):
         ])
         return cmds
 
-    def _get_tf_validate(self):
+    def _get_tf_validate(self,last_apply=None):
         """Get Terraform validation commands"""
         status_file = "status.tf_validate.failed.code"
         cmds = [
             f'{self.base_cmd} validate -no-color > {self.tmp_base_output_file}.validate 2>&1 || echo=$? > {status_file}',
             f'cat {self.tmp_base_output_file}.validate'
             ]
-        cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="validate", last_apply=None))
+        cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="validate", last_apply=last_apply))
         cmds.append(f'if [ -f {status_file} ]; then rm -f {status_file}; exit 10; fi')
 
         return cmds
 
-    def _get_tf_init(self):
+    def _get_tf_init(self,last_apply=None):
         """Get Terraform initialization commands"""
         status_file = "status.tf_init.failed.code"
         suffix_cmd = f'{self.base_cmd} init -no-color > {self.tmp_base_output_file}.init 2>&1'
@@ -171,12 +171,12 @@ class TFCmdOnAWS(TFAppHelper):
             f'({suffix_cmd}) || (rm -rf .terraform && {suffix_cmd}) || echo=$? > {status_file}',
             f'cat {self.tmp_base_output_file}.init'
         ]
-        cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="init", last_apply=None))
+        cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="init", last_apply=last_apply))
         cmds.append(f'if [ -f {status_file} ]; then rm -f {status_file}; exit 10; fi')
 
         return cmds
 
-    def _get_tf_plan(self):
+    def _get_tf_plan(self,last_apply=None):
         """Get Terraform plan commands"""
 
         status_file = "status.tf_plan.failed.code"
@@ -185,23 +185,23 @@ class TFCmdOnAWS(TFAppHelper):
             f'{self.base_cmd} plan -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1  || echo=$? > {status_file}',
             f'cat {self.tmp_base_output_file}.tfplan.out'
         ]
-        self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=None)
+        self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply)
         cmds.append(f'if [ -f {status_file} ]; then rm -f {status_file}; exit 10; fi')
 
         # plan cmds
         plan_cmds = [ f'{self.base_cmd} plan -out={self.tmp_base_output_file}.tfplan' ]
-        self.wrapper_cmds_to_s3(plan_cmds, suffix="tfplan", last_apply=None)
+        self.wrapper_cmds_to_s3(plan_cmds, suffix="tfplan", last_apply=last_apply)
 
         cmds.extend(plan_cmds)
 
         return cmds
 
     def backup_cmds_tf(self):
-        cmds = self.backup_s3_file(suffix="init")
-        cmds.extend(self.backup_s3_file(suffix="validate"))
-        cmds.extend(self.backup_s3_file(suffix="fmt"))
-        cmds.extend(self.backup_s3_file(suffix="tfplan.out"))
-        cmds.extend(self.backup_s3_file(suffix="tfplan"))
+        cmds = [ self.backup_s3_file(suffix="init") ]
+        cmds.append(self.backup_s3_file(suffix="validate"))
+        cmds.append(self.backup_s3_file(suffix="fmt"))
+        cmds.append(self.backup_s3_file(suffix="tfplan.out"))
+        cmds.append(self.backup_s3_file(suffix="tfplan"))
 
         return cmds
 
@@ -209,7 +209,6 @@ class TFCmdOnAWS(TFAppHelper):
         """Get commands for CI pipeline"""
         cmds = self._get_tf_init()
         cmds.extend(self._get_tf_validate())
-        #cmds.extend(self._get_tf_chk_fmt())  # format is visual thing
         cmds.extend(self._get_tf_plan())
         return cmds
 
@@ -230,11 +229,9 @@ class TFCmdOnAWS(TFAppHelper):
         Returns:
             list: Commands for applying Terraform configuration
         """
-        cmds = self.backup_s3_file(suffix="init")
-        cmds.extend(self.backup_s3_file(suffix="validate"))
-        cmds.extend(self._get_tf_init())
-        cmds.extend(self._get_tf_validate())
-        cmds.extend(self.s3_file_to_local(suffix="tfplan", last_apply=None))
+        cmds = self._get_tf_init(last_apply=None)
+        cmds.extend(self._get_tf_validate(last_apply=None))
+        cmds.extend(self.s3_file_to_local(suffix="tfplan", last_apply=True))
 
         if destroy_on_failure:
             cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan) || ({self.base_cmd} destroy -auto-approve && exit 9)")
@@ -245,24 +242,8 @@ class TFCmdOnAWS(TFAppHelper):
 
     def get_tf_destroy(self):
         """Get commands for destroying Terraform resources"""
-        cmds = self._get_tf_init()
+        cmds = self._get_tf_init(last_apply=True)
         cmds.append(f'{self.base_cmd} destroy -auto-approve')
-        return cmds
-
-    def _get_tf_chk_fmt(self):
-        """
-        Get commands for checking Terraform formatting.
-
-        Args:
-            exit_on_error (bool): Whether to exit on formatting errors
-
-        Returns:
-            list: Commands for checking formatting
-        """
-        cmds = [
-            f'{self.base_cmd} fmt -no-color -check -recursive > {self.tmp_base_output_file}.fmt 2>&1',
-        ]
-        self.wrapper_cmds_to_s3(cmds, suffix="fmt", last_apply=None)
         return cmds
 
     def get_tf_chk_drift(self):

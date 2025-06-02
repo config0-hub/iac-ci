@@ -210,18 +210,18 @@ class Lambdabuild(LambdaParams):
 
         if self.method in ["create", "apply"]:
             cmds = self.tfcmds.get_tf_apply()
-        elif self.method in [ "ci", "check"]:
-            cmds = self.tfsec_cmds.backup_s3_file(suffix="out")
-            cmds.extend(self.tfsec_cmds.backup_s3_file(suffix="json"))
-            cmds.extend(self.infracost_cmds.backup_s3_file(suffix="out"))
-            cmds.extend(self.infracost_cmds.backup_s3_file(suffix="json"))
+        elif self.method in [ "ci", "check", "regenerate"]:
+            cmds = [ self.tfsec_cmds.backup_s3_file(suffix="out") ]
+            cmds.append(self.tfsec_cmds.backup_s3_file(suffix="json"))
+            cmds.append(self.infracost_cmds.backup_s3_file(suffix="out"))
+            cmds.append(self.infracost_cmds.backup_s3_file(suffix="json"))
             cmds.extend(self.tfcmds.backup_cmds_tf())
             cmds.extend(self.tfcmds.get_tf_ci())
             cmds.extend(tfsec_cmds)
             cmds.extend(infracost_cmds)
         elif self.method == "pre-create":
             cmds = self.tfcmds.get_tf_pre_create()
-        elif self.method == "validate":
+        elif self.method in ["validate", "drift"]:
             cmds = self.tfcmds.get_tf_chk_drift()
         elif self.method == "destroy":
             cmds = self.tfcmds.get_tf_destroy()

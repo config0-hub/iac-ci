@@ -531,14 +531,14 @@ class WebhookProcess(PlatformReporter):
         """
         Evaluate the IaC action to be performed based on the webhook comment.
 
-        This method checks the webhook comment for an action command (check, destroy, apply).
+        This method checks the webhook comment for an action command (check, destroy, apply, validate, drift, regenerate).
         It compares the command with the configured action string in the database.
         For "apply" actions, it also checks if approval is required and if the PR is approved.
 
         Returns:
             dict: A dictionary containing the action, status, and optional message or failed message.
         """
-        actions = ["check", "destroy", "apply"]
+        actions = ["check", "destroy", "apply", "validate", "drift", "regenerate" ]
 
         if self.webhook_info.get("event_type") != "issue_comment":
             self.logger.debug('event_type is not an issue_comment - return default check')

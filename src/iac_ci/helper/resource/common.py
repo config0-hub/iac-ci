@@ -201,7 +201,7 @@ class TFAppHelper:
         mv_cmd = f'(aws s3 mv s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{filename} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/previous/{filename}) || echo ""; fi'
 
         # Combine all parts into one command
-        return [ check_cmd + mv_cmd ]
+        return check_cmd + mv_cmd
 
     def wrapper_cmds_to_s3(self, cmds, srcfile=None, suffix=None, last_apply=None):
         """
@@ -221,10 +221,6 @@ class TFAppHelper:
 
         srcfile,_filename = self._get_srcfilename(srcfile=srcfile, suffix=suffix)
         base_cp_cmd = f'aws s3 cp {srcfile} s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID'
-
-        if not last_apply:
-            init_cmd = self.backup_s3_file(srcfile, suffix)
-            cmds.insert(0,init_cmd)
 
         if last_apply:
             cmds.append(f'{base_cp_cmd}/applied/{_filename} || echo "trouble uploading output file"')

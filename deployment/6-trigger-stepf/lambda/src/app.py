@@ -42,7 +42,7 @@ BASIC_EVENTS = [
 ]
 
 # Valid actions for issue comments
-VALID_ACTIONS = ["check", "destroy", "apply"]
+VALID_ACTIONS = ["check", "destroy", "apply", "validate", "drift", "regenerate", "ci"]
 
 def _write_execution_arn_to_db(search_str, execution_arn):
     dynamodb = boto3.resource('dynamodb')
