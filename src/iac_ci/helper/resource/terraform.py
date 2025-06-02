@@ -231,7 +231,7 @@ class TFCmdOnAWS(TFAppHelper):
         """
         cmds = self._get_tf_init(last_apply=None)
         cmds.extend(self._get_tf_validate(last_apply=None))
-        cmds.extend(self.s3_file_to_local(suffix="tfplan", last_apply=True))
+        cmds.extend(self.s3_file_to_local(suffix="tfplan", last_apply=None))
 
         if destroy_on_failure:
             cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan) || ({self.base_cmd} destroy -auto-approve && exit 9)")
