@@ -13,7 +13,7 @@ from iac_ci.utilities import write_curl_cli
 from iac_ci.utilities import write_get_ssm_cli
 from iac_ci.utilities import str_to_py_obj
 
-from iac_ci.exec_log_s3 import ShellOutToS3
+from iac_ci.exec_log_s3 import ShellOut
 from iac_ci.s3_unzip_and_env_vars import S3UnzipEnvVar
 
 class TF_Lambda(object):
@@ -196,23 +196,15 @@ class TF_Lambda(object):
         self._load_zip_file_and_build_env_vars()
         os.chdir(self.tmpdir)
 
-        bucket_name = os.environ["OUTPUT_BUCKET"]
-        bucket_key = os.environ["OUTPUT_BUCKET_KEY"]
-
         try:
             build_expire_at = int(os.environ.get("BUILD_EXPIRE_AT"))  # default must be less than 900s
         except Exception:
             build_expire_at = int(time()) + 800
 
-        # should we see if there is an existing log file in s3?
-        epoch_time = str(int(time()))
-        print(f"{epoch_time}: Log file will be located @ s3://{bucket_name}/{bucket_key}")
 
-        shell_to_s3 = ShellOutToS3(self.build_env_vars,
-                                   bucket_name,
-                                   bucket_key,
-                                   exec_dir=self.exec_dir,
-                                   build_expire_at=build_expire_at)
+        shell_to_s3 = ShellOut(self.build_env_vars,
+                               exec_dir=self.exec_dir,
+                               build_expire_at=build_expire_at)
 
         status = True
 
