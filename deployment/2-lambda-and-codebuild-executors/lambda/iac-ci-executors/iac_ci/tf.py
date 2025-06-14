@@ -15,6 +15,9 @@ from iac_ci.utilities import str_to_py_obj
 
 from iac_ci.exec_log_s3 import ShellOut
 from iac_ci.s3_unzip_and_env_vars import S3UnzipEnvVar
+from iac_ci.loggerly import DirectPrintLogger
+
+logger = DirectPrintLogger(f'{os.environ["EXECUTION_ID"]}')
 
 class TF_Lambda(object):
     """
@@ -100,9 +103,9 @@ class TF_Lambda(object):
         Returns:
             dict: Dictionary of build environment variables
         """
-        print('-'*32)
-        print(f'fetching source file "s3://{self.remote_src_bucket}/{self.remote_src_bucket_key}"')
-        print('-'*32)
+        logger.debug('-'*32)
+        logger.debug(f'fetching source file "s3://{self.remote_src_bucket}/{self.remote_src_bucket_key}"')
+        logger.debug('-'*32)
 
         s3_env_vars = S3UnzipEnvVar(self.remote_src_bucket,
                                     self.remote_src_bucket_key,
@@ -156,7 +159,7 @@ class TF_Lambda(object):
             try:
                 os.environ[k] = v
             except Exception:
-                print(f"could not set initial env_var {k}")
+                logger.debug(f"could not set initial env_var {k}")
 
     def _init_env_vars(self,**event):
         """
@@ -171,10 +174,10 @@ class TF_Lambda(object):
         if not env_vars_b64:
             return
 
-        print("# _init_env_vars")
+        logger.debug("# _init_env_vars")
 
         for k,v in str_to_py_obj(env_vars_b64).items():
-            print(f'# {k} -> {v}')
+            logger.debug(f'# {k} -> {v}')
             os.environ[k] = v
 
     def run(self):
@@ -201,7 +204,6 @@ class TF_Lambda(object):
         except Exception:
             build_expire_at = int(time()) + 800
 
-
         shell_to_s3 = ShellOut(self.build_env_vars,
                                exec_dir=self.exec_dir,
                                build_expire_at=build_expire_at)
@@ -215,10 +217,10 @@ class TF_Lambda(object):
                 cmds = None
 
             if not cmds:
-                print(f"no cmds found for phase {phase}")
+                logger.debug(f"no cmds found for phase {phase}")
                 continue
 
-            print(f"cmds found for phase {phase}")
+            logger.debug(f"cmds found for phase {phase}")
             results = shell_to_s3.exec_cmds(cmds)
             if results.get("status") is False:
                 return results

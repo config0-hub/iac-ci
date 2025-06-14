@@ -44,6 +44,7 @@ RUN mkdir -p $BUILD_DIR/$LAMBDA_PKG_DIR
 
 COPY --from=build $BUILD_DIR/app $BUILD_DIR/app
 ADD main.py $BUILD_DIR/app
+ADD main_tf.py $BUILD_DIR/app
 RUN chown -R root:root $BUILD_DIR/app
 
 RUN cd $BUILD_DIR/app && \

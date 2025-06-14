@@ -11,7 +11,26 @@ import sys
 import base64
 import traceback
 from iac_ci.tf import TF_Lambda
+from iac_ci.loggerly import DirectPrintLogger
 
+# Initialize logger
+logger = DirectPrintLogger(f'{os.environ["EXECUTION_ID"]}')
+
+# Global response path
+RESPONSE_PATH = os.environ.get('TF_RESPONSE_PATH')
+
+
+def write_response_to_file(response):
+    """
+    Helper function to write a response to the designated file.
+
+    Args:
+        response (dict): Response object to write to file.
+    """
+    if RESPONSE_PATH:
+        with open(RESPONSE_PATH, 'w') as f:
+            json.dump(response, f)
+        logger.debug(f"Response written to {RESPONSE_PATH}")
 
 def run_terraform(config):
     """
@@ -37,67 +56,26 @@ def run_terraform(config):
             ...
         }
     """
-    try:
-        # Initialize TF_Lambda with configuration parameters and run operations
-        tf_lambda = TF_Lambda(**config)
-        results = tf_lambda.run()
 
-        results["output_bucket"] = os.environ["OUTPUT_BUCKET"]
-        results["output_bucket_key"] = os.environ["OUTPUT_BUCKET_KEY"]
+    # Initialize TF_Lambda with configuration parameters and run operations
+    tf_lambda = TF_Lambda(**config)
+    results = tf_lambda.run()
 
-        # Format response
-        response = {
-            'statusCode': 200,
-            'body': json.dumps(results),
-        }
+    # Format response
+    response = {
+        'statusCode': 200,
+        'body': json.dumps(results),
+    }
 
-        # Print execution summary
-        print("-" * 32)
-        print(f'- Terraform operation completed with status: {results.get("status")} ')
-        print("-" * 32)
+    # Print execution summary
+    logger.debug("-" * 32)
+    logger.debug(f'- Terraform operation completed with status: {results.get("status")} ')
+    logger.debug("-" * 32)
 
-        # Write response to the designated file if environment variable is set
-        response_path = os.environ.get('TF_RESPONSE_PATH')
-        if response_path:
-            try:
-                with open(response_path, 'w') as f:
-                    json.dump(response, f)
-                print(f"Response written to {response_path}")
-            except Exception as e:
-                print(f"Error writing response to {response_path}: {str(e)}")
+    # Write response to the designated file
+    write_response_to_file(response)
 
-        return response
-    
-    except Exception as e:
-        # Handle exceptions
-        error_response = {
-            "output_bucket": os.environ["OUTPUT_BUCKET"],
-            "output_bucket_key": os.environ["OUTPUT_BUCKET_KEY"],
-            'statusCode': 500,
-            'body': json.dumps({
-                'status': 'error',
-                'error': str(e),
-                'traceback': traceback.format_exc()
-            })
-        }
-        
-        # Print error summary
-        print("-" * 32)
-        print(f'- Terraform operation failed: {str(e)}')
-        print("-" * 32)
-        
-        # Write error response to the designated file if environment variable is set
-        response_path = os.environ.get('TF_RESPONSE_PATH')
-        if response_path:
-            try:
-                with open(response_path, 'w') as f:
-                    json.dump(error_response, f)
-                print(f"Error response written to {response_path}")
-            except Exception as write_err:
-                print(f"Error writing response to {response_path}: {str(write_err)}")
-        
-        return error_response
-
+    return response
 
 def cli_main():
     """
@@ -107,28 +85,28 @@ def cli_main():
     try:
         # Check if we have the base64 argument
         if len(sys.argv) < 2:
-            print("Error: Missing base64 configuration argument")
-            print("Usage: python main_tf.py <base64_encoded_config>")
+            logger.debug("Error: Missing base64 configuration argument")
+            logger.debug("Usage: python main_tf.py <base64_encoded_config>")
             sys.exit(1)
-        
+
         # Get the base64-encoded config from command line
         base64_string = sys.argv[1]
-        
+
         # Decode the base64 string to JSON string
         json_str = base64.b64decode(base64_string).decode()
-        
+
         # Parse the JSON string to get the configuration object
         config = json.loads(json_str)
-        
+
         # Call the terraform execution function
         result = run_terraform(config)
-        
+
         # Return appropriate exit code based on status
         if result.get('statusCode', 500) >= 400:
             sys.exit(1)
         else:
             sys.exit(0)
-        
+
     except Exception as e:
         # Print the error and traceback
         error_msg = {
@@ -139,18 +117,11 @@ def cli_main():
                 "traceback": traceback.format_exc()
             })
         }
-        
-        # Write error response to the designated file if environment variable is set
-        response_path = os.environ.get('TF_RESPONSE_PATH')
-        if response_path:
-            try:
-                with open(response_path, 'w') as f:
-                    json.dump(error_msg, f)
-                print(f"Error response written to {response_path}")
-            except Exception as write_err:
-                print(f"Error writing response to {response_path}: {str(write_err)}")
-        
-        print(json.dumps(error_msg, default=str))
+
+        # Write error response to the designated file
+        write_response_to_file(error_msg)
+
+        logger.debug(json.dumps(error_msg, default=str))
         sys.exit(1)
 
 
