@@ -6,10 +6,12 @@ This module processes CLI arguments and executes Terraform operations using TF_L
 """
 
 import os
+import boto3
 import json
 import sys
 import base64
 import traceback
+from time import time
 from iac_ci.tf import TF_Lambda
 from iac_ci.loggerly import DirectPrintLogger
 
@@ -59,12 +61,36 @@ def run_terraform(config):
 
     # Initialize TF_Lambda with configuration parameters and run operations
     tf_lambda = TF_Lambda(**config)
-    results = tf_lambda.run()
+    tf_lambda.load_build_env_vars()
+
+    try:
+        build_expire_at = int(time()) + int(tf_lambda.build_env_vars.get("BUILD_TIMEOUT"))
+    except:
+        logger.debug("using default build expire at with 800s timeout")
+        build_expire_at = int(time()) + 800
+
+    output_bucket = os.environ["OUTPUT_BUCKET"]
+    execution_id = os.environ["EXECUTION_ID"]
+    s3_client = boto3.client('s3')
+    bucket_key = f"executions/{execution_id}/expire_at"
+
+    s3_client.put_object(
+        Bucket=output_bucket,
+        Key=bucket_key,
+        Body=str(build_expire_at))
+
+    results = tf_lambda.run(build_expire_at)
+
+    results["tf_status"] = str(results["status"])
+    results["tf_exitcode"] = str(results["exitcode"])
+
+    for _delete_key in ["status", "exitcode"]:
+        del results[_delete_key]
 
     # Format response
     response = {
         'statusCode': 200,
-        'body': json.dumps(results),
+        'body': json.dumps(results)
     }
 
     # Print execution summary

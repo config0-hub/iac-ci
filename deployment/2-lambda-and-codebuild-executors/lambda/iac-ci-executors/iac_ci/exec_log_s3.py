@@ -162,7 +162,7 @@ class ShellOut:
             dict: Execution results
         """
         status = True
-        exitcode = None
+        exitcode = 0
         failed_message = None
 
         for key in self.env_vars:

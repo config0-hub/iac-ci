@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 
 import os
-from time import time
-
 from iac_ci.utilities import write_awscli_entrypt
 from iac_ci.utilities import write_unzip_cli
 from iac_ci.utilities import write_zip_cli
@@ -93,7 +91,7 @@ class TF_Lambda(object):
 
         os.makedirs(self.run_dir,exist_ok=True)
 
-    def _load_zip_file_and_build_env_vars(self):
+    def load_build_env_vars(self):
         """
         Load source files from S3 and set up build environment variables.
 
@@ -180,7 +178,7 @@ class TF_Lambda(object):
             logger.debug(f'# {k} -> {v}')
             os.environ[k] = v
 
-    def run(self):
+    def run(self,build_expire_at):
         """
         Execute the main Terraform operation workflow.
 
@@ -196,19 +194,11 @@ class TF_Lambda(object):
                 - status (bool): Success status
                 - message (str): Operation result message
         """
-        self._load_zip_file_and_build_env_vars()
         os.chdir(self.tmpdir)
-
-        try:
-            build_expire_at = int(os.environ.get("BUILD_EXPIRE_AT"))  # default must be less than 900s
-        except Exception:
-            build_expire_at = int(time()) + 800
 
         shell_to_s3 = ShellOut(self.build_env_vars,
                                exec_dir=self.exec_dir,
                                build_expire_at=build_expire_at)
-
-        status = True
 
         for phase in ["prebuild", "build", "postbuild"]:
             try:
@@ -227,6 +217,6 @@ class TF_Lambda(object):
 
         return {
             "exitcode":0,
-            "status": status,
+            "status": True,
             "message":"running terraform completed"
         }
