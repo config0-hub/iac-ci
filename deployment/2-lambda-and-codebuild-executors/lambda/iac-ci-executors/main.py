@@ -13,7 +13,8 @@ import os
 import traceback
 import time
 import boto3
-import uuid
+import glob
+import shutil
 from iac_ci.loggerly import DirectPrintLogger
 
 def s3_put_object(s3_client, bucket, key, body, content_type='text/plain', logger=None):
@@ -38,22 +39,60 @@ def s3_put_object(s3_client, bucket, key, body, content_type='text/plain', logge
             logger.debug(f"Failed to write to S3: s3://{bucket}/{key} - {str(e)}")
         return False
 
+def cleanup_tmp_directory(logger=None):
+    """
+    Clean up temporary files from previous runs
+    """
+    try:
+        # List all files in /tmp/
+        tmp_files = glob.glob("/tmp/*")
+        for f in tmp_files:
+            if os.path.isfile(f):
+                os.remove(f)
+            elif os.path.isdir(f):
+                shutil.rmtree(f)
+        if logger:
+            logger.debug(f"Cleaned up {len(tmp_files)} files/directories from /tmp/")
+    except Exception as e:
+        if logger:
+            logger.debug(f"Error cleaning up /tmp/ directory: {str(e)}")
+
 def handler(event, context):
     # Initialize defaults
     output_bucket = None
     execution_id = None
     start_time = int(time.time())
     
-    # Get or generate execution_id
+    # Clean up /tmp/ directory from previous runs
+    cleanup_tmp_directory()
+    
+    # Get execution_id from event or environment
     if event.get("execution_id"):
         execution_id = event["execution_id"]
     elif os.environ.get("EXECUTION_ID"):
         execution_id = os.environ["EXECUTION_ID"]
 
-    os.environ["EXECUTION_ID"] = execution_id
+    # Initialize logger - we'll create it even without execution_id for initial logging
+    logger = DirectPrintLogger(f'{execution_id if execution_id else "no_execution_id"}')
+    
+    # Error out if execution_id is not provided
+    if not execution_id:
+        error_msg = "execution_id must be provided in event or environment variables"
+        logger.debug(f"ERROR: {error_msg}")
 
-    # Initialize logger
-    logger = DirectPrintLogger(f'{execution_id}')
+        cleanup_tmp_directory()
+
+        # Return error response
+        return {
+            'statusCode': 400,
+            'body': json.dumps({
+                'status': False,
+                'error': error_msg
+            })
+        }
+
+    # Set execution_id in environment for child processes
+    os.environ["EXECUTION_ID"] = execution_id
     logger.debug(f"Starting execution with ID: {execution_id}")
     
     # Get output bucket - critical for storing results
@@ -71,7 +110,8 @@ def handler(event, context):
     s3_client = boto3.client('s3')
     
     # Create initiated marker
-    s3_put_object(s3_client, output_bucket, f"executions/{execution_id}/initiated", str(start_time), logger=logger)
+    if output_bucket:
+        s3_put_object(s3_client, output_bucket, f"executions/{execution_id}/initiated", str(start_time), logger=logger)
     
     try:
         # Convert the event to a base64 string
@@ -151,7 +191,7 @@ def handler(event, context):
         
         # Prepare result data with execution details
         result_data = {
-            'output_bucket':output_bucket,
+            'output_bucket': output_bucket,
             'execution_id': execution_id,
             'return_code': return_code,
             'status': 'success' if return_code == 0 else 'error',
@@ -166,7 +206,10 @@ def handler(event, context):
         # If we have response data, incorporate it into result_data
         if response_data and 'body' in response_data:
             if isinstance(response_data['body'], str):
-                body_dict = json.loads(response_data['body'])
+                try:
+                    body_dict = json.loads(response_data['body'])
+                except json.JSONDecodeError:
+                    body_dict = {"raw_body": response_data['body']}
             else:
                 body_dict = response_data['body']
                 
@@ -191,7 +234,10 @@ def handler(event, context):
             # Add our tracking information to the response body
             if 'body' in response_data:
                 if isinstance(response_data['body'], str):
-                    body_dict = json.loads(response_data['body'])
+                    try:
+                        body_dict = json.loads(response_data['body'])
+                    except json.JSONDecodeError:
+                        body_dict = {"raw_body": response_data['body']}
                 else:
                     body_dict = response_data['body']
                 
@@ -259,5 +305,6 @@ def handler(event, context):
         logger=logger
     )
     logger.debug("Lambda function execution complete")
+    cleanup_tmp_directory()
 
     return fresults
