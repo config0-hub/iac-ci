@@ -33,6 +33,8 @@ echo "S3_KEY => ${S3_KEY}"
 echo "DOCKER_TEMP_IMAGE => ${DOCKER_TEMP_IMAGE}"
 echo "######################################################"
 
+rm -rf src.tar.gz && cd src && tar cvfz ../src.tar.gz . && cd -
+
 docker build --build-arg pkg_name=$LAMBDA_PKG_NAME \
              --build-arg s3_bucket=$S3_BUCKET \
              --build-arg python_release=$PYTHON_RELEASE \
@@ -42,7 +44,15 @@ docker build --build-arg pkg_name=$LAMBDA_PKG_NAME \
              -t $DOCKER_TEMP_IMAGE . \
              -f $DOCKERFILE_LAMBDA || exit 9
 
-docker rm -fv ${DOCKER_TEMP_IMAGE}-run > /dev/null > 2&1 || echo "tried to remove previous run image"
+# Improved error handling for container removal
+# Check if container exists before attempting to remove it
+CONTAINER_NAME="${DOCKER_TEMP_IMAGE}-run"
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    echo "Removing existing container: ${CONTAINER_NAME}"
+    docker rm -fv ${CONTAINER_NAME} || echo "Failed to remove container ${CONTAINER_NAME}, continuing anyway"
+else
+    echo "No existing container named ${CONTAINER_NAME} found, continuing"
+fi
 
 if [ "$CODEBUILD_ENV" = "true" ]; then
     docker create --name ${DOCKER_TEMP_IMAGE}-run $DOCKER_TEMP_IMAGE || exit 5

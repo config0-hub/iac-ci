@@ -46,7 +46,7 @@ VALID_ACTIONS = ["check", "destroy", "apply", "validate", "drift", "regenerate",
 
 def _write_execution_arn_to_db(search_str, execution_arn):
     dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ['DYNAMODB_TABLE_RUNS']
+    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-settings')
     table = dynamodb.Table(table_name)
 
     item = {
@@ -56,95 +56,66 @@ def _write_execution_arn_to_db(search_str, execution_arn):
         "expire_at": int(time()) + 300
     }
 
-    status = None
-
     for retry in range(10):
-        try:
-            table.put_item(Item=item)
-            status = True
-            break
-        except ClientError as e:
-            print(f"Error writing to DynamoDB: {e.response['Error']['Message']}")
-        sleep(5)
-        continue
-
-    return status
+        table.put_item(Item=item)
+        return True
+        
+    return False
 
 def get_webhook_secret(trigger_id):
     dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ['DYNAMODB_TABLE_SETTINGS']
+    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-settings')
     table = dynamodb.Table(table_name)
 
-    try:
-        response = table.get_item(
-            Key={'_id': trigger_id}
-        )
+    response = table.get_item(Key={'_id': trigger_id})
+    
+    if 'Item' in response:
+        return response['Item']['secret']
         
-        if 'Item' in response:
-            return response['Item']['secret']
-        else:
-            logger.error(f"Secret not found in DynamoDB SETTINGS table for _id: {trigger_id}")
-            return None
-            
-    except ClientError as e:
-        logger.error(f"DynamoDB error table_name {table_name}: {e.response['Error']['Message']}")
-        return None
-    except Exception as e:
-        logger.error(f"Error retrieving secret table_name {table_name}: {str(e)}")
-        return None
+    logger.error(f"Secret not found in DynamoDB SETTINGS table for _id: {trigger_id}")
+    return None
 
 def validate_github_webhook(event):
-    try:
-        trigger_id = event["path"].split("/")[-1]
-        logger.info(f"Extracted trigger_id from URL: {trigger_id}")
-        
-        headers = event.get('headers', {})
-        body = event.get('body', '')
-        
-        github_signature = headers.get('x-hub-signature-256') or headers.get('X-Hub-Signature-256')
-        
-        if not github_signature:
-            logger.error("Missing GitHub signature header")
-            return False
-        
-        if github_signature.startswith('sha256='):
-            github_signature = github_signature[7:]
-        
-        secret = get_webhook_secret(trigger_id)
-        if not secret:
-            logger.error(f"Failed to retrieve webhook secret for trigger_id: {trigger_id}")
-            return False
-        
-        return validate_signature(body, secret, github_signature)
-        
-    except Exception as e:
-        logger.error(f"Error validating GitHub webhook: {str(e)}")
+    trigger_id = event["path"].split("/")[-1]
+    logger.info(f"Extracted trigger_id from URL: {trigger_id}")
+    
+    headers = event.get('headers', {})
+    body = event.get('body', '')
+    
+    github_signature = headers.get('x-hub-signature-256') or headers.get('X-Hub-Signature-256')
+    
+    if not github_signature:
+        logger.error("Missing GitHub signature header")
         return False
+    
+    if github_signature.startswith('sha256='):
+        github_signature = github_signature[7:]
+    
+    secret = get_webhook_secret(trigger_id)
+    if not secret:
+        logger.error(f"Failed to retrieve webhook secret for trigger_id: {trigger_id}")
+        return False
+    
+    return validate_signature(body, secret, github_signature)
 
 def validate_signature(payload, secret, signature):
-    try:
-        if isinstance(payload, str):
-            payload = payload.encode('utf-8')
-        
-        if isinstance(secret, str):
-            secret = secret.encode('utf-8')
-        
-        expected_signature = hmac.new(
-            secret,
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-        
-        return hmac.compare_digest(expected_signature, signature)
-        
-    except Exception as e:
-        logger.error(f"Error validating signature: {str(e)}")
-        return False
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
+    
+    if isinstance(secret, str):
+        secret = secret.encode('utf-8')
+    
+    expected_signature = hmac.new(
+        secret,
+        payload,
+        hashlib.sha256
+    ).hexdigest()
+    
+    return hmac.compare_digest(expected_signature, signature)
 
 def generate_random_string(length):
     characters = string.ascii_lowercase
-    random_string = ''.join(random.choice(characters) for _ in range(length))
-    return random_string
+    return ''.join(random.choice(characters) for _ in range(length))
 
 def check_event(headers, body):
     """
@@ -153,9 +124,6 @@ def check_event(headers, body):
     comment, make sure the action is "created". If the event is a basic
     event, return True. Otherwise, return a message indicating the type of
     event must be one of the basic events.
-
-    This function is migrated from main_webhook.py to perform early validation
-    of webhook events before they are passed to the state machine.
 
     Args:
         headers (dict): The webhook request headers
@@ -176,26 +144,21 @@ def check_event(headers, body):
 
     # Handle issue_comment action check
     if event_type == "issue_comment":
-        try:
-            # Parse the event body if it's a string
-            payload = json.loads(body) if isinstance(body, str) else body
+        # Parse the event body if it's a string
+        payload = json.loads(body) if isinstance(body, str) else body
+        
+        # Check if the action is "created"
+        if payload.get("action") != "created":
+            return False, 'issue_comment needs to have action == "created"'
             
-            # Check if the action is "created"
-            if payload.get("action") != "created":
-                return False, 'issue_comment needs to have action == "created"'
-                
-            # Check for valid commands in the comment
-            if 'comment' in payload and 'body' in payload['comment']:
-                comment = str(payload['comment']['body'].strip().split("\n")[0]).strip()
-                comment_params = [param.strip() for param in comment.split(" ")]
-                
-                # First word in comment should be a valid action
-                if comment_params[0] not in VALID_ACTIONS:
-                    return False, f'Command "{comment_params[0]}" not recognized. Must be one of: {VALID_ACTIONS}'
+        # Check for valid commands in the comment
+        if 'comment' in payload and 'body' in payload['comment']:
+            comment = str(payload['comment']['body'].strip().split("\n")[0]).strip()
+            comment_params = [param.strip() for param in comment.split(" ")]
             
-        except (json.JSONDecodeError, TypeError, KeyError, IndexError, AttributeError) as e:
-            # If we can't parse the event body or check the comment, we'll let the main webhook handler deal with it
-            logger.warning(f"Could not fully validate issue_comment: {str(e)}")
+            # First word in comment should be a valid action
+            if comment_params[0] not in VALID_ACTIONS:
+                return False, f'Command "{comment_params[0]}" not recognized. Must be one of: {VALID_ACTIONS}'
 
     if event_type in BASIC_EVENTS:
         return True, "Event type is valid"
@@ -204,6 +167,7 @@ def check_event(headers, body):
 
 def handler(event, context):
     try:
+        # Validate GitHub webhook
         if not validate_github_webhook(event):
             logger.error("GitHub webhook validation failed")
             return {
@@ -242,8 +206,10 @@ def handler(event, context):
         
         logger.info(f"Event check passed: {event_message}")
         
+        # Generate a random string for tracking
         search_str = generate_random_string(20)
 
+        # Add necessary information to the event
         event[CI_APP_NAME] = {
             "body": {
                 "step_func": True,
@@ -251,20 +217,23 @@ def handler(event, context):
             }
         }
 
+        # Get state machine ARN from environment
         state_machine_arn = os.environ['STATE_MACHINE_ARN']
 
+        # Start the Step Function execution
         stepfunctions = boto3.client('stepfunctions')
-
         response = stepfunctions.start_execution(
             stateMachineArn=state_machine_arn,
             input=json.dumps(event),
         )
-
+        
         execution_arn = response['executionArn']
         request_id = event['requestContext']['requestId']
 
+        # Store the execution ARN in DynamoDB
         _write_execution_arn_to_db(search_str, execution_arn)
 
+        # Log information about the execution
         print("-" * 32)
         print(f'event forwarded to state_machine: "{state_machine_arn}" from api_gateway: "{request_id}"')
         print(f"#{CI_APP_NAME}:::api_to_stepf {search_str} {execution_arn}")
@@ -278,7 +247,6 @@ def handler(event, context):
                 'request_id': request_id
             })
         }
-        
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return {
