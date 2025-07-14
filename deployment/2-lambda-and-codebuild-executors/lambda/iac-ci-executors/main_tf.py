@@ -16,7 +16,7 @@ from iac_ci.tf import TF_Lambda
 from iac_ci.loggerly import DirectPrintLogger
 
 # Initialize logger
-logger = DirectPrintLogger(f'{os.environ["EXECUTION_ID"]}')
+logger = DirectPrintLogger(f'{os.environ.get("EXECUTION_ID", "sync")}')
 
 # Global response path
 RESPONSE_PATH = os.environ.get('TF_RESPONSE_PATH')
@@ -70,14 +70,15 @@ def run_terraform(config):
         build_expire_at = int(time()) + 800
 
     output_bucket = os.environ["OUTPUT_BUCKET"]
-    execution_id = os.environ["EXECUTION_ID"]
-    s3_client = boto3.client('s3')
-    bucket_key = f"executions/{execution_id}/expire_at"
+    execution_id = os.environ.get("EXECUTION_ID")
 
-    s3_client.put_object(
-        Bucket=output_bucket,
-        Key=bucket_key,
-        Body=str(build_expire_at))
+    if execution_id:
+        bucket_key = f"executions/{execution_id}/expire_at"
+        s3_client = boto3.client('s3')
+        s3_client.put_object(
+            Bucket=output_bucket,
+            Key=bucket_key,
+            Body=str(build_expire_at))
 
     results = tf_lambda.run(build_expire_at)
 
@@ -95,7 +96,7 @@ def run_terraform(config):
 
     # Print execution summary
     logger.debug("-" * 32)
-    logger.debug(f'- Terraform operation completed with status: {results.get("status")} ')
+    logger.debug(f'- Terraform operation completed with status: {results.get("tf_status")} ')
     logger.debug("-" * 32)
 
     # Write response to the designated file
@@ -128,9 +129,15 @@ def cli_main():
         result = run_terraform(config)
 
         # Return appropriate exit code based on status
-        if result.get('statusCode', 500) >= 400:
+        statusCode = result.get('statusCode',500)
+
+        logger.debug(f"statusCode {statusCode}")
+
+        if statusCode >= 400:
+            logger.debug("exit 1")
             sys.exit(1)
         else:
+            logger.debug("exit 0")
             sys.exit(0)
 
     except Exception as e:

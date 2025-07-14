@@ -28,9 +28,9 @@ check_required_env_var() {
 }
 
 # ===== ENVIRONMENT SETUP =====
-readonly SRCDIR="$(pwd)"
-readonly IAC_BUILD_DIR="${IAC_BUILD_DIR:-/var/tmp/iac-ci}"
-readonly ENV_FILE="${IAC_BUILD_DIR}/build_env_vars.env"
+export SRCDIR="$(pwd)"
+export IAC_BUILD_DIR="${IAC_BUILD_DIR:-/var/tmp/iac-ci}"
+export ENV_FILE="${IAC_BUILD_DIR}/build_env_vars.env"
 
 # Load existing environment
 if [ ! -f "$ENV_FILE" ]; then
@@ -73,9 +73,9 @@ if [ $# -lt 3 ]; then
     usage
 fi
 
-readonly REPO_NAME="$1"
-readonly BRANCH="$2"
-readonly IAC_FOLDER="$3"
+export REPO_NAME="$1"
+export BRANCH="$2"
+export IAC_FOLDER="$3"
 shift 3
 
 # Default values
@@ -172,12 +172,15 @@ generate_iac_identifiers() {
     
     log_info "Generated STATEFUL_ID: $STATEFUL_ID"
     log_info "Generated IAC_CONFIG_ID: $IAC_CONFIG_ID"
+    log_info "Generated TRIGGER_ID: $TRIGGER_ID"
+    log_info "Evalated _id (IAC_CI_ID): $IAC_CONFIG_ID"
 }
 
 add_iac_config_to_dynamodb() {
     log_info "Adding IAC configuration to DynamoDB"
     
-    local json_file="/tmp/iac_config_${REPO_NAME}_${BRANCH}_$$.json"
+    local sanitized_branch="${BRANCH//\//_}"
+    local json_file="/tmp/iac_config_${REPO_NAME}_${sanitized_branch}_$$.json"
     
     cat > "$json_file" <<EOF
 {
@@ -250,8 +253,11 @@ EOF
 
 save_iac_config() {
     log_info "Saving IAC configuration"
+
+    mkdir -p /var/tmp
+    mkdir -p $IAC_BUILD_DIR
     
-    local iac_config_file="${IAC_BUILD_DIR}/iac_${REPO_NAME}_${BRANCH}_${IAC_FOLDER//\//_}_config.env"
+    local iac_config_file="${IAC_BUILD_DIR}/iac_${REPO_NAME}_${BRANCH//\//_}_${IAC_FOLDER//\//_}_config.env"
     
     cat > "$iac_config_file" <<EOF
 # IAC configuration for: $REPO_NAME/$BRANCH/$IAC_FOLDER

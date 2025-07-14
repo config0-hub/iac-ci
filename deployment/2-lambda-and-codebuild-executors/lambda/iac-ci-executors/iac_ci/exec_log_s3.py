@@ -7,7 +7,7 @@ import subprocess
 from time import time
 from iac_ci.loggerly import DirectPrintLogger
 
-logger = DirectPrintLogger(f'{os.environ["EXECUTION_ID"]}')
+logger = DirectPrintLogger(f'{os.environ.get("EXECUTION_ID", "sync")}')
 
 class ShellOut:
     """
@@ -191,7 +191,7 @@ class ShellOut:
 
             exitcode = self._exec_cmd(command,env)
 
-            if exitcode != 0:
+            if exitcode not in [0, "0" ]:
                 if name:
                     failed_message = "#"*32 + f"\n# FAILED\n action: {name}\n command: {command}\n\nexit code: {exitcode}.\n" + "#"*32
                 else:

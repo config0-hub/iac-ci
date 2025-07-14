@@ -124,21 +124,17 @@ class TriggerLambdabuild(PlatformReporter):
 
         s3 = boto3.resource("s3")
 
-        try:
-            s3.Bucket(self.remote_src_bucket).download_file(
-                self.s3_output_folder, local_file
-            )
+        s3.Bucket(self.remote_src_bucket).download_file(
+            self.s3_output_folder, local_file
+        )
 
-            with open(local_file, "r", encoding="utf-8") as file:
-                file_content = file.read()
+        with open(local_file, "r", encoding="utf-8") as file:
+            file_content = file.read()
 
-            return file_content
-        except IOError as e:
-            self.logger.error(f"Error accessing log file: {str(e)}")
-            raise
-        finally:
-            if os.path.exists(local_file):
-                os.remove(local_file)
+        if os.path.exists(local_file):
+            os.remove(local_file)
+
+        return file_content
 
     def execute(self):
         """

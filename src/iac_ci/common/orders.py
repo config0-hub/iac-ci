@@ -918,17 +918,17 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.order["total_time"] = int(max(self.order["total_time"], 1))
 
         if ignore_status:
-            msg = f"SUCCESS: {self.order['human_description']}"
+            msg = f"SUCCESS ORDER: {self.order['human_description']}"
             self.order["status"] = "completed"
         else:
             if self.results.get("status") in ["timed_out"]:
-                msg = f"TIMED_OUT: {self.order['human_description']}"
+                msg = f"TIMED_OUT ORDER: {self.order['human_description']}"
                 self.order["status"] = "timed_out"
             elif self.results.get("status") in ['failed', False, "false", "timed_out"]:
-                msg = f"FAILED: {self.order['human_description']}"
+                msg = f"FAILED ORDER: {self.order['human_description']}"
                 self.order["status"] = "failed"
             else:
-                msg = f"SUCCESS: {self.order['human_description']}"
+                msg = f"SUCCESS ORDER: {self.order['human_description']}"
                 self.order["status"] = "completed"
 
         self.add_log("\n")

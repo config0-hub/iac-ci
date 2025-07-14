@@ -16,6 +16,7 @@ import boto3
 import glob
 import shutil
 from iac_ci.loggerly import DirectPrintLogger
+from iac_ci.utilities import str_to_py_obj
 
 def s3_put_object(s3_client, bucket, key, body, content_type='text/plain', logger=None):
     """
@@ -57,51 +58,56 @@ def cleanup_tmp_directory(logger=None):
         if logger:
             logger.debug(f"Error cleaning up /tmp/ directory: {str(e)}")
 
+def _get_env_vars(**event):
+   env_vars = {}
+
+   env_vars_b64 = event.get("env_vars_b64")
+
+   if not env_vars_b64:
+       return env_vars
+
+   for k,v in str_to_py_obj(env_vars_b64).items():
+       env_vars[k] = v
+
+   return env_vars
+
 def handler(event, context):
     # Initialize defaults
     output_bucket = None
     execution_id = None
     start_time = int(time.time())
-    
+    env_vars = _get_env_vars(**event)
+
     # Clean up /tmp/ directory from previous runs
     cleanup_tmp_directory()
     
     # Get execution_id from event or environment
     if event.get("execution_id"):
         execution_id = event["execution_id"]
-    elif os.environ.get("EXECUTION_ID"):
-        execution_id = os.environ["EXECUTION_ID"]
+    elif env_vars.get("EXECUTION_ID"):
+        execution_id = env_vars["EXECUTION_ID"]
 
     # Initialize logger - we'll create it even without execution_id for initial logging
-    logger = DirectPrintLogger(f'{execution_id if execution_id else "no_execution_id"}')
+    logger = DirectPrintLogger(f'{execution_id if execution_id else "sync"}')
     
     # Error out if execution_id is not provided
     if not execution_id:
-        error_msg = "execution_id must be provided in event or environment variables"
-        logger.debug(f"ERROR: {error_msg}")
-
-        cleanup_tmp_directory()
-
-        # Return error response
-        return {
-            'statusCode': 400,
-            'body': json.dumps({
-                'status': False,
-                'error': error_msg
-            })
-        }
-
-    # Set execution_id in environment for child processes
-    os.environ["EXECUTION_ID"] = execution_id
-    logger.debug(f"Starting execution with ID: {execution_id}")
+        error_msg = "execution_id ideally should be provided in event or environment variables"
+        logger.debug(f"WARNING: {error_msg}")
+    else:
+        # Set execution_id in environment for child processes
+        os.environ["EXECUTION_ID"] = execution_id
+        logger.debug(f"Starting execution with ID: {execution_id}")
     
     # Get output bucket - critical for storing results
-    if os.environ.get("OUTPUT_BUCKET"):
-        output_bucket = os.environ["OUTPUT_BUCKET"]
+    if env_vars.get("OUTPUT_BUCKET"):
+        output_bucket = env_vars["OUTPUT_BUCKET"]
     else:
         output_bucket = event.get("output_bucket")
         if output_bucket:
             os.environ["OUTPUT_BUCKET"] = output_bucket
+
+    output_bucket_key = env_vars.get("OUTPUT_BUCKET_KEY")
 
     if not output_bucket:
         logger.debug('WARNING: No output bucket specified. Results will not be saved to S3.')
@@ -110,7 +116,7 @@ def handler(event, context):
     s3_client = boto3.client('s3')
     
     # Create initiated marker
-    if output_bucket:
+    if output_bucket and execution_id:
         s3_put_object(s3_client, output_bucket, f"executions/{execution_id}/initiated", str(start_time), logger=logger)
     
     try:
@@ -161,7 +167,7 @@ def handler(event, context):
         return_code = process.returncode
 
         # if 0, this does not mean the actual main_tf execution succeeded
-        logger.debug(f"main_tf cli execution exit code: {return_code}")
+        logger.debug(f"main_tf cli execution return_code: {return_code}")
         
         # Initialize response data
         response_data = {}
@@ -189,50 +195,23 @@ def handler(event, context):
             combined_output = f"ERROR: Output file {output_path} was not created"
             logger.debug(combined_output)
         
-        # Prepare result data with execution details
-        result_data = {
-            'output_bucket': output_bucket,
-            'execution_id': execution_id,
-            'return_code': return_code,
-            'status': 'success' if return_code == 0 else 'error',
-            'function_name': context.function_name if context else 'unknown',
-            'execution_time': f"{context.get_remaining_time_in_millis()/1000:.2f} seconds" if context else "unknown",
-            'output': combined_output,
-            'start_time': start_time,
-            'done': True,
-            'end_time': int(time.time())
-        }
-        
-        # If we have response data, incorporate it into result_data
-        if response_data and 'body' in response_data:
-            if isinstance(response_data['body'], str):
-                try:
-                    body_dict = json.loads(response_data['body'])
-                except json.JSONDecodeError:
-                    body_dict = {"raw_body": response_data['body']}
-            else:
-                body_dict = response_data['body']
-                
-            # Transfer all body information to result data
-            result_data.update(body_dict)
-        
-        # Upload result data to S3
-        if output_bucket:
-            result_key = f"executions/{execution_id}/result.json"
-            s3_put_object(
-                s3_client, 
-                output_bucket, 
-                result_key, 
-                json.dumps(result_data),
-                content_type='application/json',
-                logger=logger
-            )
-            result_data['result_key'] = result_key
-        
-        # Prepare final response
-        if response_data:
-            # Add our tracking information to the response body
-            if 'body' in response_data:
+        if execution_id:
+            # Prepare result data with execution details
+            result_data = {
+                'output_bucket': output_bucket,
+                'execution_id': execution_id,
+                'return_code': return_code,
+                'status': 'success' if return_code == 0 else 'error',
+                'function_name': context.function_name if context else 'unknown',
+                'execution_time': f"{context.get_remaining_time_in_millis()/1000:.2f} seconds" if context else "unknown",
+                'output': combined_output,
+                'start_time': start_time,
+                'done': True,
+                'end_time': int(time.time())
+            }
+            
+            # If we have response data, incorporate it into result_data
+            if response_data and 'body' in response_data:
                 if isinstance(response_data['body'], str):
                     try:
                         body_dict = json.loads(response_data['body'])
@@ -240,71 +219,123 @@ def handler(event, context):
                         body_dict = {"raw_body": response_data['body']}
                 else:
                     body_dict = response_data['body']
-                
-                # Add tracking URLs and execution info
-                if output_bucket:
-                    body_dict['initiated_key'] = f"executions/{execution_id}/initiated"
-                    body_dict['result_key'] = f"executions/{execution_id}/result.json"
-                    body_dict['done_key'] = f"executions/{execution_id}/done"
-                
-                body_dict['function_name'] = context.function_name if context else 'unknown'
-                body_dict['execution_time'] = f"{context.get_remaining_time_in_millis()/1000:.2f} seconds" if context else "unknown"
-                
-                # Update the response body
-                response_data['body'] = json.dumps(body_dict)
+                    
+                # Transfer all body information to result data
+                result_data.update(body_dict)
             
-            fresults = response_data
+            # Upload result data to S3
+            if output_bucket:
+                result_key = f"executions/{execution_id}/result.json"
+                s3_put_object(
+                    s3_client, 
+                    output_bucket, 
+                    result_key, 
+                    json.dumps(result_data),
+                    content_type='application/json',
+                    logger=logger
+                )
+                result_data['result_key'] = result_key
+            
+            # Prepare final response
+            if response_data:
+                # Add our tracking information to the response body
+                if 'body' in response_data:
+                    if isinstance(response_data['body'], str):
+                        try:
+                            body_dict = json.loads(response_data['body'])
+                        except json.JSONDecodeError:
+                            body_dict = {"raw_body": response_data['body']}
+                    else:
+                        body_dict = response_data['body']
+                    
+                    # Add tracking URLs and execution info
+                    if output_bucket:
+                        body_dict['initiated_key'] = f"executions/{execution_id}/initiated"
+                        body_dict['result_key'] = f"executions/{execution_id}/result.json"
+                        body_dict['done_key'] = f"executions/{execution_id}/done"
+                    
+                    body_dict['function_name'] = context.function_name if context else 'unknown'
+                    body_dict['execution_time'] = f"{context.get_remaining_time_in_millis()/1000:.2f} seconds" if context else "unknown"
+                    
+                    # Update the response body
+                    response_data['body'] = json.dumps(body_dict)
+                
+                fresults = response_data
+            else:
+                # Create a response based on the result data
+                fresults = {
+                    'body': json.dumps(result_data)
+                }
         else:
-            # Create a response based on the result data
-            fresults = {
-                'statusCode': 200 if return_code == 0 else 400,
-                'body': json.dumps(result_data)
-            }
-        
+            if output_bucket_key:
+                s3_put_object(
+                    s3_client,
+                    output_bucket,
+                    output_bucket_key,
+                    combined_output,
+                    logger=logger
+                )
+                logger.debug(f"wrote log s3://{output_bucket}/{output_bucket_key}")
+
+            fresults = {}
+
+        fresults['statusCode'] = 200 if return_code == 0 else 400
+
     except Exception as e:
         error_traceback = traceback.format_exc()
         logger.debug(f"Error executing main_tf operation: {str(e)}")
         logger.debug(error_traceback)
-        
-        fresults = {
-            'statusCode': 500,
-            'body': json.dumps({
-                'status': 'error',
-                'error': str(e),
-                'traceback': error_traceback,
-                'execution_id': execution_id
-            })
-        }
-        
-        # Upload error info to result.json
-        if output_bucket:
-            error_data = {
-                'execution_id': execution_id,
-                'status': 'error',
-                'error': str(e),
-                'traceback': error_traceback,
-                'start_time': start_time,
-                'done': True,
-                'end_time': int(time.time())
+
+        if execution_id:
+            fresults = {
+                'statusCode': 500,
+                'body': json.dumps({
+                    'status': 'error',
+                    'error': str(e),
+                    'traceback': error_traceback,
+                    'execution_id': execution_id
+                })
             }
-            s3_put_object(
-                s3_client,
-                output_bucket,
-                f"executions/{execution_id}/result.json",
-                json.dumps(error_data),
-                content_type='application/json',
-                logger=logger
-            )
-    
-    # Create done marker to indicate completion
-    s3_put_object(
-        s3_client, 
-        output_bucket, 
-        f"executions/{execution_id}/done", 
-        str(int(time.time())),
-        logger=logger
-    )
+
+            # Upload error info to result.json
+            if output_bucket:
+                error_data = {
+                    'execution_id': execution_id,
+                    'status': 'error',
+                    'error': str(e),
+                    'traceback': error_traceback,
+                    'start_time': start_time,
+                    'done': True,
+                    'end_time': int(time.time())
+                }
+                s3_put_object(
+                    s3_client,
+                    output_bucket,
+                    f"executions/{execution_id}/result.json",
+                    json.dumps(error_data),
+                    content_type='application/json',
+                    logger=logger
+                )
+        else:
+            fresults = {
+                'statusCode': 500,
+                'body': json.dumps({
+                    'status': 'error',
+                    'error': str(e),
+                    'traceback': error_traceback
+                })
+            }
+
+    if execution_id:
+        # Create done marker to indicate completion
+        s3_put_object(
+            s3_client,
+            output_bucket,
+            f"executions/{execution_id}/done",
+            str(int(time.time())),
+            logger=logger
+        )
+
     logger.debug("Lambda function execution complete")
     cleanup_tmp_directory()
-
     return fresults

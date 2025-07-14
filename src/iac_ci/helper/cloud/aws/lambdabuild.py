@@ -176,42 +176,41 @@ class LambdaResourceHelper:
         """
         # ['ResponseMetadata', 'StatusCode', 'LogResult', 'ExecutedVersion', 'Payload']
         self.response = self._trigger_build()
+        self.results["lambda_status"] = int(self.response["StatusCode"])
 
-        lambda_status = int(self.response["StatusCode"])
-        self.results["lambda_status"] = lambda_status
-
-        payload = json.loads(self.response["Payload"].read().decode())
+        try:
+            payload = json.loads(self.response["Payload"].read().decode())
+        except:
+            payload = {}
 
         try:
             lambda_results = json.loads(payload["body"])
-        except (json.JSONDecodeError, KeyError):
-            lambda_results = payload
-            lambda_results["status"] = False
-            
-            # Handling stackTrace without using .get()
-            if "stackTrace" in lambda_results:
-                stackTrace = lambda_results["stackTrace"]
-                self.results["failed_message"] = " ".join(stackTrace)
-                self.results["output"] = " ".join(stackTrace)
-            else:
-                self.results["failed_message"] = "Unknown error"
-                self.results["output"] = "Unknown error"
+        except:
+            lambda_results = {}
+
+        if "stackTrace" in lambda_results:
+            stackTrace = lambda_results["stackTrace"]
+            self.results["failed_message"] = " ".join(stackTrace)
+            self.results["output"] = " ".join(stackTrace)
 
         self.results["lambda_results"] = lambda_results
 
-        if lambda_results["status"] is True and lambda_status == 200:
-            self.results["status"] = lambda_results["status"]
+        if lambda_results.get("status") is True or self.results.get("lambda_status") == 200:
+            self.results["status"] = True
             self.results["exitcode"] = 0
-        elif lambda_status != 200:
+        elif lambda_results.get("status") is False or self.results.get("lambda_status") != 200:
             self.results["status"] = False
             self.results["exitcode"] = "78"
             if "failed_message" not in self.results:
                 self.results["failed_message"] = "lambda function failed"
         else:
-            self.results["status"] = False
-            self.results["exitcode"] = "79"
-            if "failed_message" not in self.results:
-                self.results["failed_message"] = "execution of cmd in lambda function failed"
+            # if there is a failed message, we considered it failed
+            if "failed_message" in self.results:
+                self.results["status"] = False
+                self.results["exitcode"] = "78"
+            else:
+                self.results["status"] = True
+                self.results["exitcode"] = 0
 
         if "output" not in self.results:
             self.results["output"] = b64_decode(self.response["LogResult"])

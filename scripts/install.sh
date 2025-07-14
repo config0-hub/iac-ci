@@ -81,15 +81,14 @@ run_terraform() {
 
 # ===== ENVIRONMENT SETUP =====
 # Centralize environmental variables that don't change
-readonly SRCDIR=$(pwd)
-export SRCDIR
-readonly IAC_BUILD_DIR=${IAC_BUILD_DIR:=/var/tmp/iac-ci}
-readonly IAC_FIRST_REPO_TO_REGISTER=${IAC_FIRST_REPO_TO_REGISTER:=iac-ci}
-readonly IAC_REPO_SSH_KEYS_LOCAL_DIR=${IAC_BUILD_DIR}/github/ssh_keys
-readonly IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
-readonly ENV_FILE=${IAC_BUILD_DIR}/build_env_vars.env
-readonly EXECUTORS_TF_BACKEND=${EXECUTORS_TF_BACKEND:=/tmp/backend.tf}
-readonly EXECUTORS_BUILD_ENV_VARS_FILE=${EXECUTORS_BUILD_ENV_VARS_FILE:=/tmp/.build_executors_vars.env}
+export SRCDIR=$(pwd)
+export IAC_BUILD_DIR=${IAC_BUILD_DIR:=/var/tmp/iac-ci}
+export IAC_FIRST_REPO_TO_REGISTER=${IAC_FIRST_REPO_TO_REGISTER:=iac-ci}
+export IAC_REPO_SSH_KEYS_LOCAL_DIR=${IAC_BUILD_DIR}/github/ssh_keys
+export IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
+export ENV_FILE=${IAC_BUILD_DIR}/build_env_vars.env
+export EXECUTORS_TF_BACKEND=${EXECUTORS_TF_BACKEND:=/tmp/backend.tf}
+export EXECUTORS_BUILD_ENV_VARS_FILE=${EXECUTORS_BUILD_ENV_VARS_FILE:=/tmp/.build_executors_vars.env}
 
 # Check if env file exists and source it if it does
 if [ -f "$ENV_FILE" ]; then

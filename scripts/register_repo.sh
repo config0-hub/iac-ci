@@ -56,11 +56,11 @@ run_terraform() {
 }
 
 # ===== ENVIRONMENT SETUP =====
-readonly SRCDIR="$(pwd)"
-readonly IAC_BUILD_DIR="${IAC_BUILD_DIR:-/var/tmp/iac-ci}"
-readonly ENV_FILE="${IAC_BUILD_DIR}/build_env_vars.env"
-readonly IAC_REPO_SSH_KEYS_LOCAL_DIR="${IAC_BUILD_DIR}/github/ssh_keys"
-readonly IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
+export SRCDIR="$(pwd)"
+export IAC_BUILD_DIR="${IAC_BUILD_DIR:-/var/tmp/iac-ci}"
+export ENV_FILE="${IAC_BUILD_DIR}/build_env_vars.env"
+export IAC_REPO_SSH_KEYS_LOCAL_DIR="${IAC_BUILD_DIR}/github/ssh_keys"
+export IAC_REPO_SSH_KEYS_EMAIL="iac-ci@iac-ci.com"
 
 # Load existing environment
 if [ ! -f "$ENV_FILE" ]; then
@@ -90,7 +90,7 @@ if [ $# -ne 1 ]; then
     usage
 fi
 
-readonly NEW_REPO_NAME="$1"
+export NEW_REPO_NAME="$1"
 
 # Validate required environment variables from main installation
 check_required_env_var "TF_VAR_stateful_bucket_name"

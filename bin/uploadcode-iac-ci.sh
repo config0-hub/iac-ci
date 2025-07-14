@@ -10,7 +10,6 @@ DEFAULT_SOURCE_FILE="/tmp/iac-ci.zip"
 CREDENTIALS_FILE=${CREDENTIALS_FILE:-$DEFAULT_CREDENTIALS_FILE}
 S3_BUCKET=${S3_BUCKET:-$DEFAULT_S3_BUCKET}
 S3_KEY=${S3_KEY:-$DEFAULT_S3_KEY}
-SOURCE_FILE=${SOURCE_FILE:-$DEFAULT_SOURCE_FILE}
 
 # Source credentials file if it exists
 if [ -f "$CREDENTIALS_FILE" ]; then
@@ -32,14 +31,15 @@ if [ -z "$S3_KEY" ]; then
 fi
 
 # Check if source file exists
-if [ ! -f "$SOURCE_FILE" ]; then
-    echo "Error: Source file $SOURCE_FILE does not exist"
+if [ ! -f "$DEFAULT_SOURCE_FILE" ]; then
+    echo "Error: Source file $DEFAULT_SOURCE_FILE does not exist"
     exit 1
 fi
 
 # Upload file to S3
-echo "Uploading $SOURCE_FILE to s3://$S3_BUCKET/$S3_KEY"
-aws s3 cp "$SOURCE_FILE" "s3://$S3_BUCKET/$S3_KEY"
+echo "Uploading $DEFAULT_SOURCE_FILE to s3://$S3_BUCKET/$S3_KEY"
+echo "aws s3 cp $DEFAULT_SOURCE_FILE s3://$S3_BUCKET/$S3_KEY"
+aws s3 cp $DEFAULT_SOURCE_FILE "s3://$S3_BUCKET/$S3_KEY"
 UPLOAD_STATUS=$?
 
 if [ $UPLOAD_STATUS -eq 0 ]; then

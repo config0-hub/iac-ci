@@ -15,7 +15,7 @@ from iac_ci.exec_log_s3 import ShellOut
 from iac_ci.s3_unzip_and_env_vars import S3UnzipEnvVar
 from iac_ci.loggerly import DirectPrintLogger
 
-logger = DirectPrintLogger(f'{os.environ["EXECUTION_ID"]}')
+logger = DirectPrintLogger(f'{os.environ.get("EXECUTION_ID", "sync")}')
 
 class TF_Lambda(object):
     """
