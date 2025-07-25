@@ -4,14 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="9363b8dd-65ed-41c4-8156-74cf439b46ee" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/iac_ci/exec_log_s3.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/iac_ci/exec_log_s3.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/iac_ci/tf.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/iac_ci/tf.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/main_tf.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../deployment/2-lambda-and-codebuild-executors/lambda/iac-ci-executors/main_tf.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-    </list>
+    <list default="true" id="9363b8dd-65ed-41c4-8156-74cf439b46ee" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

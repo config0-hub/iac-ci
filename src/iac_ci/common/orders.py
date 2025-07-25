@@ -370,7 +370,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
     def _set_up_github_conn_to_repo(self):
 
         repo_name = self.webhook_info["repo_name"]
-        owner = self.webhook_info["owner"]
         pr_number = self.webhook_info["pr_number"]
 
         self.set_search_tag()
@@ -383,7 +382,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
                           pr_number,
                           search_tag=self.search_tag,
                           token=self.github_token,
-                          owner=owner)
+                          owner=self.webhook_info["owner"])
 
     def finalize_build_pr(self,status):
         """

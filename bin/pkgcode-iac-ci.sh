@@ -20,6 +20,8 @@ unzip base.iac-ci-system-lambda.zip -d "$TMP_BUILD_DIR" || { echo "Failed to unz
 
 # Copy source files
 cd .. || { echo "Failed to change directory"; exit 9; }
+
+echo "copying iac-ci files like app_webhook, app_codebuild, etc..."
 cp -rp src/* "$TMP_BUILD_DIR/" || { echo "Failed to copy source files"; exit 9; }
 
 # Clean up any existing output files

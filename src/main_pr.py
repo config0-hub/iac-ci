@@ -614,12 +614,12 @@ class GitPr(PlatformReporter):
         """
         self.commit_hash = self.run_info["commit_hash"]
         self.repo_name = self.trigger_info.get("repo_name")
-        self.repo_owner = self.trigger_info.get("repo_owner")
         self.remote_stateful_bucket = self.trigger_info["remote_stateful_bucket"]
         self.stateful_id = self.iac_ci_info["stateful_id"]
         self.tmp_bucket = self.trigger_info["s3_bucket_tmp"]
         self.pr_number = self.webhook_info["pr_number"]
         self.branch = self.webhook_info["branch"]
+        self.repo_owner = self.webhook_info["owner"]
 
         github_token_info = self.get_github_token()
 
