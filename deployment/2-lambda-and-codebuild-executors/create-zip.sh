@@ -61,7 +61,7 @@ build_lambda_package() {
 
     # Process the zip file
     rm -rf temp
-    mkdir temp
+    mkdir temp || echo "directory may already exists"
     unzip base.zip -d temp || { echo "Could not unzip file"; exit 9; }
     cp -rp iac_ci temp/ || { echo "Could not copy iac-ci/* files"; exit 9; }
     cp -rp main.py temp/ || { echo "Could not copy main.py/* files"; exit 9; }
@@ -75,45 +75,11 @@ build_lambda_package() {
     echo ""
 }
 
-# Execute Terraform
-exec_tf() {
-    echo -e "\nExecuting initial tf install with buckets and lambda zip file\n"
-    
-    cp -rp terraform ${BUILD_DIR}/ || exit 3
-    cd ${BUILD_DIR}/terraform || exit 4
-    [ ! -f "${BUILD_DIR}/terraform/backend.tf" ] && [ -f "${BUILD_DIR}/backend.tf" ] && echo -e "copying ${BUILD_DIR}/backend.tf\n" && cp "${BUILD_DIR}/backend.tf" .
-    mkdir -p lambda || echo "Lambda directory seems to already exist"
-    cp -rp ${TMPDIR}/iac-ci.zip lambda || exit 7
-
-    # First phase - initial resources
-    mv _disabled/1-* .
-    tofu init || exit 9
-    tofu plan
-    
-    if ! tofu apply -auto-approve; then
-        local _STATUS=$?
-        echo "Terraform apply failed with exit status: $_STATUS"
-        exit $_STATUS
-    fi
-
-    sleep 10
-
-    # Second phase - remaining resources
-    mv _disabled/* .
-    tofu init || exit 9
-    
-    if ! tofu apply -auto-approve; then
-        local _STATUS=$?
-        echo "Terraform apply failed with exit status: $_STATUS"
-        exit $_STATUS
-    fi
-}
-
 # Print completion message
 print_completion() {
     echo "#################################################################"
     echo ""
-    echo "Please store the build directory of iac-ci ${BUILD_DIR}"
+    echo "iac-ci-executors.zip found in /tmp"
     echo ""
     echo "#################################################################"
 }

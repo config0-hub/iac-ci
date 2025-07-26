@@ -30,6 +30,7 @@ ARG pkg_name=PleaseSetPkgName
 ARG s3_bucket=PleaseSetS3Bucket
 
 ENV LAMBDA_PKG_NAME=$pkg_name
+ENV S3_BUCKET=$s3_bucket
 ENV LAMBDA_PKG_DIR=package/lambda
 ENV BUILD_DIR=/var/tmp/build
 
@@ -43,11 +44,11 @@ RUN mkdir -p $BUILD_DIR/$LAMBDA_PKG_DIR
 
 COPY --from=build $BUILD_DIR/app $BUILD_DIR/app
 ADD main.py $BUILD_DIR/app
+ADD main_tf.py $BUILD_DIR/app
 RUN chown -R root:root $BUILD_DIR/app
 
 RUN cd $BUILD_DIR/app && \
     zip -q -r9 $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME . && \
     echo "Lambda package found here: $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME.zip"
 
-RUN echo "Lambda package found here: $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME.zip"
 RUN echo "Lambda package found here: $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME.zip"

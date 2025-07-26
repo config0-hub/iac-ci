@@ -125,10 +125,13 @@ class S3UnzipEnvVar:
         if ssm_names:
             # Split the comma-delimited string into a list
             parameter_names = [name.strip() for name in ssm_names.split(',')]
-            self._retrieve_ssm_parameters(parameter_names)
         elif ssm_name:
-            print(f'retrieving ssm_name: "{ssm_name}"')
-            self._retrieve_ssm_parameters([ssm_name])
+            parameter_names = [ssm_name]
+        else:
+            parameter_names = None
+
+        if parameter_names:
+            self._retrieve_ssm_parameters(parameter_names)
 
     def _insert_env_var_lines(self, env_var_lines):
         """
@@ -204,10 +207,15 @@ class S3UnzipEnvVar:
             parameter_names (list): List of SSM parameter names to retrieve
         """
         for name in parameter_names:
+            print("#"*32)
+            print(f'# Looking to retrieve ssm_name: "{name}"')
+            print("#"*32)
             try:
                 self._get_and_parse_ssm_param(name)
             except Exception as e:
-                print(f"Error retrieving parameter {name}: {e}")
+                print("#" * 32)
+                print(f"# Error retrieving parameter {name}: {e}")
+                print("#"*32)
 
     def _get_env_vars(self):
         """
