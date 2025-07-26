@@ -1,6 +1,6 @@
-FROM public.ecr.aws/docker/library/python:3.9 AS build
+FROM public.ecr.aws/docker/library/python:3.10 AS build
 
-ENV PYTHON_RELEASE=3.9
+ENV PYTHON_RELEASE=3.10
 ENV BUILD_DIR=/var/tmp/build
 
 RUN mkdir -p $BUILD_DIR
@@ -50,5 +50,3 @@ RUN chown -R root:root $BUILD_DIR/app
 RUN cd $BUILD_DIR/app && \
     zip -q -r9 $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME . && \
     echo "Lambda package found here: $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME.zip"
-
-RUN echo "Lambda package found here: $BUILD_DIR/$LAMBDA_PKG_DIR/$LAMBDA_PKG_NAME.zip"
