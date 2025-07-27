@@ -58,6 +58,16 @@ def cleanup_tmp_directory(logger=None):
         if logger:
             logger.debug(f"Error cleaning up /tmp/ directory: {str(e)}")
 
+    tmp_dir = "/tmp"
+    for f in [".netrc", ".ssh", ".config", ".cache", ".aws"]:
+        try:
+            if os.path.isfile(f):
+                os.remove(f)
+            elif os.path.isdir(f):
+                shutil.rmtree(f)
+        except Exception as e:
+            logger.debug(f"Error cleaning up {tmp_dir}/{f} - error {str(e)}")
+
 def _get_env_vars(**event):
    env_vars = {}
 

@@ -9,7 +9,6 @@ import os
 import tempfile
 import zipfile
 import boto3
-import shutil
 from io import BytesIO
 
 class S3UnzipEnvVar:
@@ -203,6 +202,10 @@ class S3UnzipEnvVar:
                     print(f'# setting env variable "{key}" to os.environ')
                     os.environ[key] = f"{value}"
 
+                    # we will automatically set the github token into .netrc
+                    if key == "GITHUB_TOKEN":
+                        self.create_netrc_file(value)
+
         print("#" * 32)
         return self.env_vars
 
@@ -223,6 +226,39 @@ class S3UnzipEnvVar:
 
         # Add to env_vars dictionary
         self._insert_env_var_lines(env_var_lines, set_in_env)
+
+    @staticmethod
+    def create_netrc_file(github_token):
+        """
+        Creates a .netrc file with GitHub credentials for HTTPS authentication.
+
+        Args:
+            github_token (str): The GitHub Personal Access Token (PAT).
+
+        Returns:
+            str: The absolute path of the created .netrc file.
+        """
+
+        for file_path in ["/tmp/.netrc", "~/.netrc"]:
+            try:
+                # Expand the file path to the user's home directory
+                file_path = os.path.expanduser(file_path)
+
+                # Write the .netrc file content
+                with open(file_path, "w") as netrc_file:
+                    netrc_file.write(f"machine github.com\n")
+                    netrc_file.write(f"login {github_token}\n")
+                    netrc_file.write(f"password x-oauth-basic\n")
+
+                # Set secure file permissions (read/write for owner only)
+                os.chmod(file_path, 0o600)
+                print("#"*32)
+                print(f".netrc file created successfully at {file_path}")
+                print("#"*32)
+            except Exception as e:
+                print("#"*32)
+                print(f"Error creating .netrc file: {e}")
+                print("#"*32)
 
     def _retrieve_ssm_parameters(self, parameter_names, set_in_env=None):
         """
