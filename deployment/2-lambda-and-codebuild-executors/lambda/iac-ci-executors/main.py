@@ -80,7 +80,53 @@ def handler(event, context):
 
     # Clean up /tmp/ directory from previous runs
     cleanup_tmp_directory()
-    
+
+    # Base directory (writable location)
+    tmp_dir = '/tmp'
+
+    # 1. Set up essential directories
+    os.makedirs(f'{tmp_dir}/.ssh', exist_ok=True)
+    os.makedirs(f'{tmp_dir}/.config', exist_ok=True)
+    os.makedirs(f'{tmp_dir}/.cache', exist_ok=True)
+    os.makedirs(f'{tmp_dir}/.aws', exist_ok=True)
+
+    # 2. Set all environment variables
+    # Basic directory setup
+    os.environ['HOME'] = tmp_dir
+    os.environ['TMPDIR'] = tmp_dir
+
+    # Terraform/OpenTofu specific
+    os.environ['TF_CLI_ARGS'] = '-no-color'
+    os.environ['TF_DATA_DIR'] = f'{tmp_dir}/.terraform'
+    os.makedirs(f'{tmp_dir}/.terraform', exist_ok=True)
+    os.environ['TF_IN_AUTOMATION'] = 'true'
+    #os.environ['TF_LOG'] = 'INFO'  # Set to DEBUG for more verbose output
+
+    # Git and SSH configuration
+    os.environ['GIT_CONFIG_GLOBAL'] = f'{tmp_dir}/.gitconfig'
+    os.environ['SSH_CONFIG_DIR'] = f'{tmp_dir}/.ssh'
+
+    # Define the SSH command to use with Git
+    #f"ssh -i {tmp_dir}/.ssh/id_rsa "
+    os.environ['GIT_SSH_COMMAND'] = (
+        "ssh "
+        "-o UserKnownHostsFile=/dev/null "
+        "-o StrictHostKeyChecking=no "
+    )
+
+    # Cache directories to avoid read-only filesystem issues
+    os.environ['XDG_CACHE_HOME'] = f'{tmp_dir}/.cache'
+    os.environ['XDG_CONFIG_HOME'] = f'{tmp_dir}/.config'
+
+    # AWS config directory if needed
+    os.environ['AWS_CONFIG_FILE'] = f'{tmp_dir}/.aws/config'
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = f'{tmp_dir}/.aws/credentials'
+
+    # You can now use this setup within your program.
+    print("#"*32)
+    print("# Environment setup complete.")
+    print("#"*32)
+
     # Get execution_id from event or environment
     if event.get("execution_id"):
         execution_id = event["execution_id"]

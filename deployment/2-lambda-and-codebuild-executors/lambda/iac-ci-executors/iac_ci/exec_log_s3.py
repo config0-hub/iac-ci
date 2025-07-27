@@ -62,13 +62,6 @@ class ShellOut:
 
         logger.debug(f"Starting command: {command}")
 
-        # testtest456
-        if env.get("GITHUB_TOKEN"):
-            print("*"*32)
-            print(f'os environ GITHUB_TOKEN set!')
-            print("*"*32)
-            print("*"*32)
-
         # Execute command with output redirected to file
         with open(output_file, 'w') as output_redirect:
             process = subprocess.Popen(
