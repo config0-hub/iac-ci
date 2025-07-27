@@ -3,3 +3,6 @@
 .exports.env
 rebuild-test-user.sh
 .backend.tf
+.venv
+.venv*
+venv*
