@@ -91,10 +91,13 @@ class S3UnzipEnvVar:
         build_file_path = f'{self.base_file_path}/build_env_vars.env.enc'
         ssm_file_path = f'{self.base_file_path}/ssm.env.enc'
 
+        print("-" * 32)
+        print("-" * 32)
         for _file in [ build_file_path, ssm_file_path ]:
             if not os.path.exists(_file):
-                print(f'env_var file: "{_file}" does not exists')
+                print(f'- env_var file: "{_file}" does not exists')
                 continue
+            print(f'- env_var file: "{_file}" provided')
 
             with open(_file, 'rb') as enc_file:
                 encoded_content = enc_file.read()
@@ -104,7 +107,10 @@ class S3UnzipEnvVar:
                 for line in env_var_lines:
                     if '=' in line:
                         key, value = line.split('=', 1)
+                        print(f'_load_env_vars: env var "{key}" from {_file})')
                         self.env_vars[key.strip()] = value.strip()
+        print("-" * 32)
+        print("-" * 32)
 
     def _load_ssm_parameters(self):
         """
@@ -122,18 +128,31 @@ class S3UnzipEnvVar:
         if not ssm_name:
             ssm_name = self.env_vars.get("SSM_NAME")
 
+        additional_ssm_names = self.env_vars.get("ADD_SSM_NAMES")
+
+        if additional_ssm_names:
+            try:
+                additional_ssm_names = [name.strip() for name in additional_ssm_names.split(',')]
+            except:
+                additional_ssm_names = [additional_ssm_names]
+
+        parameter_names = []
+
         if ssm_names:
             # Split the comma-delimited string into a list
             parameter_names = [name.strip() for name in ssm_names.split(',')]
-        elif ssm_name:
-            parameter_names = [ssm_name]
-        else:
-            parameter_names = None
+
+        if ssm_name:
+            if ssm_name not in parameter_names:
+                parameter_names.append(ssm_name)
+
+        if additional_ssm_names:
+            self._retrieve_ssm_parameters(additional_ssm_names,set_in_env=True)
 
         if parameter_names:
             self._retrieve_ssm_parameters(parameter_names)
 
-    def _insert_env_var_lines(self, env_var_lines):
+    def _insert_env_var_lines(self, env_var_lines, set_in_env=None):
         """
         Process and insert environment variable lines into env_vars dictionary.
 
@@ -143,6 +162,7 @@ class S3UnzipEnvVar:
         Returns:
             dict: Updated environment variables dictionary
         """
+        print("#" * 32)
         for line in env_var_lines:
             # Strip whitespace and ignore empty lines or comments
             line = line.strip()
@@ -176,12 +196,17 @@ class S3UnzipEnvVar:
                     print('WARN: could not strip or get "value" for env var')
                     continue
 
-                print(f'added env variable "{key}" to env_vars')
+                print(f'# added env variable "{key}" to env_vars')
                 self.env_vars[key] = value
 
+                if set_in_env:
+                    print(f'# setting env variable "{key}" to os.environ')
+                    os.environ[key] = f"{value}"
+
+        print("#" * 32)
         return self.env_vars
 
-    def _get_and_parse_ssm_param(self, name):
+    def _get_and_parse_ssm_param(self, name, set_in_env=None):
         """
         Retrieve and parse a single SSM parameter.
 
@@ -197,9 +222,9 @@ class S3UnzipEnvVar:
         env_var_lines = decoded_value.decode('utf-8').strip().splitlines()
 
         # Add to env_vars dictionary
-        self._insert_env_var_lines(env_var_lines)
+        self._insert_env_var_lines(env_var_lines, set_in_env)
 
-    def _retrieve_ssm_parameters(self, parameter_names):
+    def _retrieve_ssm_parameters(self, parameter_names, set_in_env=None):
         """
         Retrieve multiple SSM parameters.
 
@@ -207,15 +232,11 @@ class S3UnzipEnvVar:
             parameter_names (list): List of SSM parameter names to retrieve
         """
         for name in parameter_names:
-            print("#"*32)
-            print(f'# Looking to retrieve ssm_name: "{name}"')
-            print("#"*32)
+            print(f'# Retrieving ssm_name: "{name}"')
             try:
-                self._get_and_parse_ssm_param(name)
+                self._get_and_parse_ssm_param(name,set_in_env)
             except Exception as e:
-                print("#" * 32)
                 print(f"# Error retrieving parameter {name}: {e}")
-                print("#"*32)
 
     def _get_env_vars(self):
         """
