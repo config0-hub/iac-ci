@@ -239,7 +239,7 @@ class S3UnzipEnvVar:
             str: The absolute path of the created .netrc file.
         """
 
-        for file_path in ["/tmp/.netrc", "~/.netrc"]:
+        for file_path in ["/tmp/.netrc", "~/.netrc", "/tmp/lambda/.netrc"]:
             try:
                 # Expand the file path to the user's home directory
                 file_path = os.path.expanduser(file_path)
