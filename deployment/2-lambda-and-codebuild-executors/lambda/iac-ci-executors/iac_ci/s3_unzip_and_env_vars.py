@@ -90,13 +90,11 @@ class S3UnzipEnvVar:
         build_file_path = f'{self.base_file_path}/build_env_vars.env.enc'
         ssm_file_path = f'{self.base_file_path}/ssm.env.enc'
 
-        print("-" * 32)
-        print("-" * 32)
         for _file in [ build_file_path, ssm_file_path ]:
             if not os.path.exists(_file):
-                print(f'- env_var file: "{_file}" does not exists')
+                print(f'# env_var file: "{_file}" not found')
                 continue
-            print(f'- env_var file: "{_file}" provided')
+            print(f'# env_var file: "{_file}" found')
 
             with open(_file, 'rb') as enc_file:
                 encoded_content = enc_file.read()
@@ -106,10 +104,8 @@ class S3UnzipEnvVar:
                 for line in env_var_lines:
                     if '=' in line:
                         key, value = line.split('=', 1)
-                        print(f'_load_env_vars: env var "{key}" from {_file})')
+                        print(f'# _load_env_vars: env var "{key}" from {_file})')
                         self.env_vars[key.strip()] = value.strip()
-        print("-" * 32)
-        print("-" * 32)
 
     def _load_ssm_parameters(self):
         """
@@ -252,13 +248,9 @@ class S3UnzipEnvVar:
 
                 # Set secure file permissions (read/write for owner only)
                 os.chmod(file_path, 0o600)
-                print("#"*32)
-                print(f".netrc file created successfully at {file_path}")
-                print("#"*32)
+                print(f"# .netrc file created successfully at {file_path}")
             except Exception as e:
-                print("#"*32)
-                print(f"Error creating .netrc file: {e}")
-                print("#"*32)
+                print(f"# ERROR creating .netrc file: {e}")
 
     def _retrieve_ssm_parameters(self, parameter_names, set_in_env=None):
         """
