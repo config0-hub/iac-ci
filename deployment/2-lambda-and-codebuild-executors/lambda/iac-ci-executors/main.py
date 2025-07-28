@@ -59,7 +59,7 @@ def cleanup_tmp_directory(logger=None):
             logger.debug(f"Error cleaning up /tmp/ directory: {str(e)}")
 
     tmp_dir = "/tmp"
-    for f in ["lambda", ".netrc", ".ssh", ".config", ".cache", ".aws"]:
+    for f in ["lambda", ".netrc", ".ssh", ".config", ".cache", ".aws", ".ssm_value"]:
         try:
             if os.path.isfile(f):
                 os.remove(f)
@@ -67,6 +67,12 @@ def cleanup_tmp_directory(logger=None):
                 shutil.rmtree(f)
         except Exception as e:
             logger.debug(f"Error cleaning up {tmp_dir}/{f} - error {str(e)}")
+
+    # clean out hidden files
+    try:
+        os.system("rm -rf /tmp/.*")
+    except Exception as e:
+        logger.debug(f"Error cleaning up /tmp/* - error {str(e)}")
 
 def _get_env_vars(**event):
    env_vars = {}

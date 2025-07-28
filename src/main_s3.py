@@ -10,22 +10,18 @@ License: GNU General Public License v3.0
 
 import shutil
 import os
-import boto3
 import base64
 import traceback
-from botocore.exceptions import ClientError
 
 from iac_ci.common.serialization import b64_encode
-from iac_ci.common.shellouts import system_exec
 from iac_ci.common.utilities import find_filename
-
 from iac_ci.common.utilities import id_generator
 from iac_ci.common.utilities import rm_rf
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.orders import PlatformReporter
+from iac_ci.common.gitclone import CloneCheckOutCode
 
-
-class PkgCodeToS3(PlatformReporter):
+class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
     """
     This is not currently being used.
 
@@ -39,26 +35,14 @@ class PkgCodeToS3(PlatformReporter):
         self.classname = "PkgCodeToS3"
         self.logger = IaCLogger(self.classname)
         PlatformReporter.__init__(self, **kwargs)
-
-        session = boto3.Session()
-        self.ssm = session.client('ssm')
+        CloneCheckOutCode.__init__(self, **kwargs)
 
         self.app_dir = None
-        self.iac_ci_folder = None
         self.archive_dir = None
         self.clone_dir = None
-        self.ssm_ssh_key = None
         self.repo_name = None
-        self.git_depth = None
-        self.ssh_url = None
         self.phase = "pkgcode-to-s3"
-        self.private_key_path = "/tmp/id_rsa"
-        self.base_clone_dir = "/tmp/code/src"
-        self.base_ssh = f"GIT_SSH_COMMAND='ssh -i {self.private_key_path} -o StrictHostKeyChecking=no -o IdentitiesOnly=yes'"
         self.maxtime = 180
-
-        rm_rf(self.private_key_path)
-        rm_rf(self.base_clone_dir)
 
         self._set_order()
 
@@ -74,94 +58,6 @@ class PkgCodeToS3(PlatformReporter):
             "role": "s3/upload"
         }
         self.new_order(**inputargs)
-
-    def _write_private_key(self):
-        """
-        Writes a private key to a file.
-
-        It first checks if the private key hash is set as an environment variable.
-        If not, it then checks if the SSM name for the private key hash is set. If so,
-        it retrieves the private key hash from the SSM parameter store and
-        writes it to a file. If neither are set, it raises an exception.
-
-        Raises:
-            Exception: if private_key_hash is not found
-        """
-        private_key_hash = os.environ.get("PRIVATE_KEY_HASH")
-
-        if not private_key_hash and self.ssm_ssh_key:
-            _ssm_info = self.ssm.get_parameter(Name=self.ssm_ssh_key, WithDecryption=True)
-            private_key_hash = _ssm_info["Parameter"]["Value"]
-
-        if not private_key_hash:
-            failed_message = "private_key_hash not found"
-            raise Exception(failed_message)
-
-        cmd = f'echo "{private_key_hash}" | base64 -d > {self.private_key_path}'
-        system_exec(cmd)
-
-        os.chmod(self.private_key_path, 0o600)
-
-    def _fetch_code(self):
-        """
-        Fetches the source code from github.
-
-        It first creates a temporary directory and initializes a git repository.
-        Then it adds the remote origin with the ssh url and fetches the code.
-        If the git_depth is set, it fetches the code with the specified depth.
-        Finally, it moves the code to the clone directory and removes the temporary directory.
-
-        Raises:
-            Exception: if any of the git commands fail
-        """
-        temp_dir = os.path.join("/tmp", id_generator())
-
-        os.makedirs(temp_dir, exist_ok=True)
-        os.chdir(temp_dir)
-
-        cmd = "git init"
-        cmds = [cmd]
-        cmd = f'git remote add origin "{self.ssh_url}"'
-        cmds.append(cmd)
-
-        if self.git_depth:
-            cmd = f'{self.base_ssh} git fetch --quiet origin --depth {self.git_depth}'
-        else:
-            cmd = f'{self.base_ssh} git fetch --quiet origin'
-
-        cmds.append(cmd)
-
-        if self.git_depth:
-            cmd = f'{self.base_ssh} git fetch --quiet --depth {self.git_depth} origin {self.commit_hash}'
-        else:
-            cmd = f'{self.base_ssh} git fetch --quiet origin {self.commit_hash}'
-
-        cmds.append(cmd)
-        cmd = f'{self.base_ssh} git checkout --quiet -f {self.commit_hash}'
-        cmds.extend((cmd, 'rm -rf .git'))
-        
-        for _cmd in cmds:
-            self.logger.debug("#" * 32)
-            self.logger.debug("")
-            self.logger.debug(_cmd)
-            self.logger.debug("")
-            system_exec(_cmd)
-
-        os.makedirs(self.clone_dir, exist_ok=True)
-
-        if self.iac_ci_folder:
-            src_dir = f'{temp_dir}/{self.iac_ci_folder}'
-        else:
-            src_dir = temp_dir
-
-        for item in os.listdir(src_dir):
-            source_item = os.path.join(src_dir, item)
-            target_item = os.path.join(self.clone_dir, item)
-            try:
-                shutil.move(source_item, target_item)
-                self.logger.debug(f"Moved '{source_item}' to '{target_item}'.")
-            except (shutil.Error, OSError, IOError) as e:
-                self.logger.debug(f"Error moving '{source_item}': {e}")
 
     def _get_build_env_vars_frm_file(self):
         """
@@ -259,6 +155,19 @@ class PkgCodeToS3(PlatformReporter):
         msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"
         self.add_log(msg)
 
+    def clone_and_archive_code(self):
+
+        failed_message = None
+
+        try:
+            self.write_private_key()
+            self.fetch_code()
+            self._archive_code()
+        except:
+            failed_message = traceback.format_exc()
+
+        return {"failed_message": failed_message}
+
     def execute(self):
         """
         Execute the main process of this class.
@@ -277,17 +186,14 @@ class PkgCodeToS3(PlatformReporter):
         self.archive_dir = f'{self.base_clone_dir}/{id_generator()}'
         self.clone_dir = f'{self.archive_dir}/{self.app_dir}'
 
+        failed_message = self.clone_and_archive_code()
+
         self.results["publish_vars"] = {
             "remote_src_bucket": self.remote_src_bucket,
             "remote_src_bucket_key": self.remote_src_bucket_key
         }
 
-        try:
-            self._write_private_key()
-            self._fetch_code()
-            self._archive_code()
-        except:
-            failed_message = traceback.format_exc()
+        if failed_message:
             failure_s3_key = id_generator()
             failed_file = os.path.join("/tmp", failure_s3_key)
             with open(failed_file, 'w') as _file:

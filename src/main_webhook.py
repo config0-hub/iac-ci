@@ -16,9 +16,13 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
+import yaml
 import contextlib
 import os
 import json
+import traceback
+import requests
+import base64
 from time import time
 from time import sleep
 from copy import deepcopy
@@ -28,9 +32,9 @@ from iac_ci.common.orders import PlatformReporter
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.github_pr import GitHubRepo
+from iac_ci.common.gitclone import CloneCheckOutCode
 
-
-class WebhookProcess(PlatformReporter):
+class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     """
     Process webhooks from GitHub or Bitbucket repositories.
     
@@ -54,6 +58,8 @@ class WebhookProcess(PlatformReporter):
             step_func=step_func,
             **kwargs
         )
+        
+        CloneCheckOutCode.__init__(self, **kwargs)
 
         self.phase = "load_webhook"
         self.expire_at = int(os.environ.get("BUILD_TTL", "3600"))
@@ -66,6 +72,7 @@ class WebhookProcess(PlatformReporter):
             "issue_comment"
         ]
 
+        self.github_repo = None
         self.webhook_info = self._get_webhook_info()
 
         if self.event.get("path"):
@@ -87,6 +94,40 @@ class WebhookProcess(PlatformReporter):
             self.logger.debug("#" * 32)
 
         self._set_order()
+
+    #def get_yaml_from_commit(self, commit_hash, file_path='.iac_ci/config.yml'):
+
+    #    content = self.github_repo.get_file(commit_hash,file_path)
+
+    #    if not content:
+    #        self.logger.error(f"No content found in {file_path} at commit {commit_hash}")
+    #        return False
+
+    #    try:
+    #        content = base64.b64decode(content).decode('utf-8')
+    #        # Parse the YAML content
+    #        yaml_data = yaml.safe_load(content)
+    #        self.logger.debug(f"Successfully retrieved and parsed {file_path} from commit {commit_hash}")
+    #        return yaml_data
+    #    except Exception as e:
+    #        self.logger.error(f"Error processing file: {e}")
+
+    #    return None
+
+    def clone_and_get_yaml(self):
+
+        failed_message = None
+
+        #commit_hash, file_path='.iac_ci/config.yml'):
+        #iac_ci_folders = self.get_yaml_from_commit(self.webhook_info["commit_hash"],
+
+        try:
+            self.write_private_key()
+            self.fetch_code()
+        except:
+            failed_message = traceback.format_exc()
+
+        return {"failed_message": failed_message}
 
     def get_stepf_arn(self):
         """
@@ -125,7 +166,11 @@ class WebhookProcess(PlatformReporter):
             "console_url": console_url
         }
 
-    def _setup_github(self):
+    def _get_changed_dirs(self):
+        self._setup_github()
+        return self.github_repo.get_changed_dirs()
+
+    def _setup_github(self,reset=True):
         """
         Sets up the GitHub repository configuration.
     
@@ -140,6 +185,9 @@ class WebhookProcess(PlatformReporter):
         """
 
         self.set_github_token()
+
+        if self.github_repo and not reset:
+            return self.github_repo
 
         self.github_repo = GitHubRepo(
             repo_name=self.webhook_info["repo_name"],
@@ -715,6 +763,56 @@ class WebhookProcess(PlatformReporter):
 
         return
 
+    def _get_iac_ci_folder(self):
+
+        # check directories
+        changed_dirs = self._get_changed_dirs()
+
+        iac_ci_folder = self.iac_ci_info.get("iac_ci_folder")
+        #iac_ci_folders = [ iac_ci_folder.strip() for iac_ci_folder in self.iac_ci_info.get("iac_ci_folders").split(",") ]
+
+        if iac_ci_folder:
+            return {
+                "iac_ci_folder": iac_ci_folder,
+                "status": True
+            }
+
+        iac_ci_folders = self.clone_and_get_yaml()
+
+        print('z0'*32)
+        print('z0'*32)
+        print(iac_ci_folders)
+        print('z0'*32)
+        print('z0'*32)
+
+        if not iac_ci_folders:
+            return {
+                "failed_message": "no yaml provided at .iac_ci/config.yaml",
+                "status": False
+            }
+
+        match_folders = []
+
+        for iac_ci_folder in iac_ci_folders:
+            if iac_ci_folder in changed_dirs:
+                match_folders.append(iac_ci_folder)
+
+        if len(match_folders) != 1:
+            failed_message = f"should only find one matched folder - found instead {match_folders} in the same PR"
+            return {
+                "failed_message":failed_message,
+                "status":False
+            }
+
+        iac_ci_folder = match_folders[0]
+
+        self.logger.debug(f"iac_ci_folder: {iac_ci_folder}")
+
+        return {
+            "iac_ci_folder": iac_ci_folder,
+            "status": True
+        }
+
     def execute(self, **kwargs):
         """
         Execute the webhook processing logic.
@@ -728,6 +826,30 @@ class WebhookProcess(PlatformReporter):
         Note: Event type checking is now primarily performed in app.py, but we keep
         a backup check here for safety during the transition.
         """
+
+        # testtest456
+        print('a'*32)
+        print('a'*32)
+        failed_message = None
+        try:
+            iac_folder_info = self._get_iac_ci_folder()
+            if not iac_folder_info.get("status"):
+                failed_message = iac_folder_info.get("failed_message")
+        except Exception:
+            failed_message = traceback.format_exc()
+        print('a'*32)
+        print('a'*32)
+
+        if failed_message:
+            self.logger.error(failed_message)
+            self.results["status"] = None
+            self.results["initialized"] = None
+            self.results["msg"] = failed_message
+            self.add_log(self.results["msg"])
+            return False
+        print('a'*32)
+        print('a'*32)
+
         # Backup check for event type - primarily done in app.py now
         msg = self._chk_event()
 

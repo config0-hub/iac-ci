@@ -41,7 +41,7 @@ class GitHubRepo:
             repo_name (str): Name of the repository.
             pr_number (int): Number of the pull request.
             **kwargs: Additional arguments including 'token' and 'owner'.
-        
+
         Raises:
             ValueError: If 'GITHUB_TOKEN' is not set.
         """
@@ -81,6 +81,45 @@ class GitHubRepo:
 
         self.repo_name = repo_name
         self.url_pr = f'https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls'
+    
+    def get_file(self, commit_hash, file_path='.iac_ci/config.yml'):
+        """
+        Retrieves and parses a YAML file from a specific commit hash.
+
+        Args:
+            commit_hash (str): The commit hash to get the file from.
+            file_path (str, optional): Path to the YAML file. Defaults to '.iac_ci/config.yml'.
+
+        Returns:
+            dict: The parsed YAML content as a dictionary, or None if the file
+                  doesn't exist or there was an error.
+        """
+
+        url = f'https://github.com/{self.owner}/{self.repo_name}/raw/{commit_hash}/{file_path}'
+
+        # testtest456
+        print('y'*32)
+        print(url)
+        print('y'*32)
+
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code != 200:
+            self.logger.error(f"Failed to get file {file_path} at commit {commit_hash}: {response.status_code}")
+            return None
+
+        data = response.json()
+
+        # GitHub API returns content as base64 encoded
+        if 'content' in data:
+            try:
+                return base64.b64decode(data['content']).decode('utf-8')
+            except Exception as e:
+                self.logger.error(f"Error processing file: {e}")
+                return None
+
+        self.logger.error(f"No content found in {file_path} at commit {commit_hash}")
+        return None
 
     def _set_base_urls(self):
         """
@@ -325,6 +364,98 @@ class GitHubRepo:
             headers=self.headers, 
             json={'body': comment}
         )
+
+    def get_changed_files(self, pr_num=None):
+        """
+        Retrieves the list of files changed in a pull request.
+
+        Args:
+            pr_num (int, optional): The pull request number. Defaults to the instance's pr_number.
+
+        Returns:
+            list: List of file objects containing information about changed files.
+                  Each file object includes keys like:
+                  - filename: path of the file
+                  - status: 'added', 'modified', 'removed', etc.
+                  - additions: number of lines added
+                  - deletions: number of lines deleted
+                  - changes: total changes
+                  - patch: diff patch if available
+
+        Raises:
+            ValueError: If pr_num is not provided and not set in the instance.
+        """
+        if not pr_num:
+            pr_num = self.pr_number
+
+        if not pr_num:
+            raise ValueError("Pull request number (pr_num) must be provided")
+
+        url = f'https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls/{pr_num}/files'
+
+        files = []
+        page = 1
+
+        # GitHub API paginates results, so we need to fetch all pages
+        while True:
+            response = requests.get(
+                url,
+                params={'page': page, 'per_page': 100},  # 100 is the maximum per page
+                headers=self.headers
+            )
+
+            if response.status_code != 200:
+                self.logger.error(f"Failed to fetch changed files: {response.status_code}, {response.text}")
+                return []
+
+            data = response.json()
+
+            if not data:  # No more pages
+                break
+
+            files.extend(data)
+            page += 1
+
+        self.logger.debug(f"Found {len(files)} changed files in PR #{pr_num}")
+        return files
+
+    def get_changed_dirs(self, pr_num=None, include_root=False):
+        """
+        Retrieves the list of unique directories containing changed files in a pull request.
+
+        Args:
+            pr_num (int, optional): The pull request number. Defaults to the instance's pr_number.
+            include_root (bool, optional): Whether to include the root directory (".") in results.
+                                          Defaults to False.
+
+        Returns:
+            list: Sorted list of unique directories containing changed files.
+
+        Raises:
+            ValueError: If pr_num is not provided and not set in the instance.
+        """
+        # Get all changed files
+        changed_files = self.get_changed_files(pr_num=pr_num)
+
+        # Extract directories from file paths
+        dirs = set()
+        for file_obj in changed_files:
+            filepath = file_obj.get('filename', '')
+
+            # Skip special files like "~" which might be temporary
+            if filepath in ['~'] or filepath.startswith('.') and len(filepath) == 1:
+                continue
+
+            if '/' in filepath:
+                # For files in subdirectories, extract the directory path
+                dir_path = '/'.join(filepath.split('/')[:-1])
+                dirs.add(dir_path)
+            elif include_root and filepath:  # Only add root if file is valid
+                # For files in the root directory, add "." if requested
+                dirs.add(".")
+
+        # Convert to sorted list
+        return sorted(list(dirs))
 
     def get_owner(self):
         """

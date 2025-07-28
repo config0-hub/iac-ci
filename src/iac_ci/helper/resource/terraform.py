@@ -22,9 +22,9 @@ This module provides utilities for executing Terraform commands in AWS environme
 
 import os
 
+from iac_ci.s3_unzip_and_env_vars import SSMHelper
 from iac_ci.helper.resource.tfinstaller import get_tf_install
 from iac_ci.helper.resource.common import TFAppHelper
-
 
 class TFCmdOnAWS(TFAppHelper):
     """
@@ -96,6 +96,47 @@ class TFCmdOnAWS(TFAppHelper):
         else:
             return ['echo $SSM_VALUE | base64 -d >> $TMPDIR/.ssm_value']
 
+    def _get_add_ssm_names(self):
+        additional_ssm_names = os.environ.get("ADD_SSM_NAMES")
+
+        if not additional_ssm_names:
+            return
+
+        try:
+            additional_ssm_names = [name.strip() for name in additional_ssm_names.split(',')]
+        except:
+            additional_ssm_names = [additional_ssm_names]
+
+        ssm_helper = SSMHelper()
+
+        ssm_value_lines = []
+
+        for additional_ssm_name in additional_ssm_names:
+            ssm_value_lines.extend(ssm_helper.get_and_parse_ssm_param(additional_ssm_name,
+                                   set_in_env=False,
+                                   insert=False))
+
+        cmds = []
+
+        for num, ssm_value_line in enumerate(ssm_value_lines, start=1):
+            key_value = ssm_helper.get_key_value_from_line(ssm_value_line)
+            if not key_value:
+                continue  # Skip lines that can't be parsed
+
+            key, value = key_value
+            if key == "GITHUB_TOKEN":
+                base64_str = ssm_helper.create_netrc_file(value,get_base_64=True)
+                cmds.extend([
+                    f'echo "{base64_str}" | base64 -d > $TMPDIR/.netrc',
+                    f'echo "{base64_str}" | base64 -d > ~/.netrc'
+                ])
+            elif num == 1:
+                cmds.append(f'echo {ssm_value_line} > $TMPDIR/.ssm_values')
+            else:
+                cmds.append(f'echo {ssm_value_line} >> $TMPDIR/.ssm_values')
+
+        return cmds
+
     def _set_src_envfiles_cmd(self):
         """
         Set commands for environment file setup.
@@ -127,9 +168,16 @@ class TFCmdOnAWS(TFAppHelper):
             f'if [ -f {self.stateful_dir}/run/{envfile}.enc ]; then cat {self.stateful_dir}/run/{envfile}.enc | base64 -d > {self.stateful_dir}/{self.envfile}; fi'
         ]
 
-        # TODO - will we need SSM_NAMES plural?
         cmds.extend(self._get_ssm_concat_cmds())
         cmds.extend(self._set_src_envfiles_cmd())
+
+        add_cmds = self._get_add_ssm_names()
+
+        # Only extend if add_cmds is not None
+        if add_cmds:
+            cmds.extend(add_cmds)
+            cmds.append('if [ -f $TMPDIR/.ssm_values ]; then cd $TMPDIR/; . ./.ssm_values; fi')
+
         return cmds
 
     def s3_tfpkg_to_local(self):
@@ -150,12 +198,12 @@ class TFCmdOnAWS(TFAppHelper):
             f'rm -rf {self.stateful_dir}/src.$STATEFUL_ID.zip'
         ])
         return cmds
-
+    
     def _get_tf_validate(self,last_apply=None):
         """Get Terraform validation commands"""
         status_file = "status.tf_validate.failed.code"
         cmds = [
-            f'{self.base_cmd} validate -no-color > {self.tmp_base_output_file}.validate 2>&1 || echo=$? > {status_file}',
+            f'{self.base_cmd} validate -no-color > {self.tmp_base_output_file}.validate 2>&1 || echo $? > {status_file}',
             f'cat {self.tmp_base_output_file}.validate'
             ]
         cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="validate", last_apply=last_apply))
@@ -168,7 +216,7 @@ class TFCmdOnAWS(TFAppHelper):
         status_file = "status.tf_init.failed.code"
         suffix_cmd = f'{self.base_cmd} init -no-color > {self.tmp_base_output_file}.init 2>&1'
         cmds = [
-            f'({suffix_cmd}) || (rm -rf .terraform && {suffix_cmd}) || echo=$? > {status_file}',
+            f'({suffix_cmd}) || (rm -rf .terraform && {suffix_cmd}) || echo $? > {status_file}',
             f'cat {self.tmp_base_output_file}.init'
         ]
         cmds.extend(self.wrapper_cmds_to_s3(cmds, suffix="init", last_apply=last_apply))
@@ -182,7 +230,7 @@ class TFCmdOnAWS(TFAppHelper):
         status_file = "status.tf_plan.failed.code"
         # output cmds
         cmds = [
-            f'{self.base_cmd} plan -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1  || echo=$? > {status_file}',
+            f'{self.base_cmd} plan -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1 || echo $? > {status_file}',
             f'cat {self.tmp_base_output_file}.tfplan.out'
         ]
         self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply)
