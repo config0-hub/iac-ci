@@ -59,8 +59,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             **kwargs
         )
         
-        CloneCheckOutCode.__init__(self, **kwargs)
-
         self.phase = "load_webhook"
         self.expire_at = int(os.environ.get("BUILD_TTL", "3600"))
         self.init_failure = None
@@ -74,6 +72,10 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         self.github_repo = None
         self.webhook_info = self._get_webhook_info()
+
+        CloneCheckOutCode.__init__(self,
+                                   ssh_url=self.webhook_info.get("ssh_url"),
+                                   commit_hash=self.webhook_info["commit_hash"])
 
         if self.event.get("path"):
             self.webhook_info["trigger_id"] = self.event["path"].split("/")[-1]  # get trigger_id from url
@@ -116,18 +118,22 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
     def clone_and_get_yaml(self):
 
-        failed_message = None
-
-        #commit_hash, file_path='.iac_ci/config.yml'):
-        #iac_ci_folders = self.get_yaml_from_commit(self.webhook_info["commit_hash"],
-
         try:
             self.write_private_key()
             self.fetch_code()
         except:
             failed_message = traceback.format_exc()
+            return {"failed_message": failed_message}
 
-        return {"failed_message": failed_message}
+        contents = self.get_repo_file(".iac_ci/config.yaml", file_type="yaml")
+
+        if not contents:
+            contents = self.get_repo_file(".iac_ci/config.yml", file_type="yaml")
+
+        if contents:
+            return contents["iac_ci_folders"]
+
+        return contents
 
     def get_stepf_arn(self):
         """
@@ -551,6 +557,9 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         values["_id"] = self.run_id
         values["run_id"] = self.run_id
 
+        if self.run_info.get("iac_ci_folder"):
+            values["iac_ci_folder"] = self.run_info["iac_ci_folder"]
+
         if self.iac_ci_id:
             values["iac_ci_id"] = self.iac_ci_id
 
@@ -779,12 +788,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         iac_ci_folders = self.clone_and_get_yaml()
 
-        print('z0'*32)
-        print('z0'*32)
-        print(iac_ci_folders)
-        print('z0'*32)
-        print('z0'*32)
-
         if not iac_ci_folders:
             return {
                 "failed_message": "no yaml provided at .iac_ci/config.yaml",
@@ -827,18 +830,18 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         a backup check here for safety during the transition.
         """
 
-        # testtest456
-        print('a'*32)
-        print('a'*32)
         failed_message = None
+        iac_ci_folder = None
         try:
             iac_folder_info = self._get_iac_ci_folder()
             if not iac_folder_info.get("status"):
                 failed_message = iac_folder_info.get("failed_message")
+            iac_ci_folder = iac_folder_info["iac_ci_folder"]
+            self.logger.debug("#"*32)
+            self.logger.debug(f"# iac_ci_folder used is: {iac_ci_folder}")
+            self.logger.debug("#"*32)
         except Exception:
             failed_message = traceback.format_exc()
-        print('a'*32)
-        print('a'*32)
 
         if failed_message:
             self.logger.error(failed_message)
@@ -847,8 +850,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.results["msg"] = failed_message
             self.add_log(self.results["msg"])
             return False
-        print('a'*32)
-        print('a'*32)
 
         # Backup check for event type - primarily done in app.py now
         msg = self._chk_event()
@@ -903,6 +904,8 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         self.results[action] = True
         self.webhook_info[action] = True
         self.run_info[action] = True
+        self.results["iac_ci_folder"] = iac_ci_folder
+        self.run_info["iac_ci_folder"] = iac_ci_folder
 
         if self.webhook_info.get("status") is False:
             msg = self.webhook_info["msg"]

@@ -568,7 +568,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.git_depth = self.run_info.get("git_depth", 1)
         self.stateful_id = self.iac_ci_info["stateful_id"]
         self.app_dir = self.iac_ci_info["app_dir"]
-        self.iac_ci_folder = self.iac_ci_info.get("iac_ci_folder")
+        self.iac_ci_folder = self.run_info["iac_ci_folder"]
         self.set_s3_key()
 
     def _setup(self):

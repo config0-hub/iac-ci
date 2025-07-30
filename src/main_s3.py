@@ -166,7 +166,7 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         except:
             failed_message = traceback.format_exc()
 
-        return {"failed_message": failed_message}
+        return failed_message
 
     def execute(self):
         """

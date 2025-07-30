@@ -11,15 +11,17 @@ License: GNU General Public License v3.0
 import shutil
 import os
 import boto3
+import json
+import yaml
 
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.shellouts import system_exec
 from iac_ci.common.utilities import find_filename
-
 from iac_ci.common.utilities import id_generator
 from iac_ci.common.utilities import rm_rf
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.orders import PlatformReporter
+
 
 class CloneCheckOutCode:
     """
@@ -30,12 +32,25 @@ class CloneCheckOutCode:
         
         self.ssm_ssh_key = None
         self.git_depth = None
-        self.ssh_url = None
-        self.commit_hash = None
+
+        if kwargs.get("ssh_url"):
+            self.ssh_url = kwargs["ssh_url"]
+
+        if kwargs.get("commit_hash"):
+            self.commit_hash = kwargs["commit_hash"]
+
         self.iac_ci_folder = None
         self.private_key_path = "/tmp/id_rsa"
         self.base_clone_dir = "/tmp/code/src"
-        self.base_ssh = f"GIT_SSH_COMMAND='ssh -i {self.private_key_path} -o StrictHostKeyChecking=no -o IdentitiesOnly=yes'"
+        self.clone_dir = f'{self.base_clone_dir}/{id_generator()}'
+
+        # Updated GIT_SSH_COMMAND to avoid writing to known_hosts
+        self.base_ssh = (
+            f"GIT_SSH_COMMAND='ssh -i {self.private_key_path} "
+            "-o StrictHostKeyChecking=no "
+            "-o IdentitiesOnly=yes "
+            "-o UserKnownHostsFile=/dev/null'"
+        )
         
         # Initialize SSM client
         session = boto3.Session()
@@ -69,6 +84,7 @@ class CloneCheckOutCode:
 
         cmd = f'echo "{private_key_hash}" | base64 -d > {self.private_key_path}'
         system_exec(cmd)
+        self.logger.debug(f"wrote private key cmd {self.private_key_path}")
 
         os.chmod(self.private_key_path, 0o600)
 
@@ -89,33 +105,23 @@ class CloneCheckOutCode:
         os.makedirs(temp_dir, exist_ok=True)
         os.chdir(temp_dir)
 
-        cmd = "git init"
-        cmds = [cmd]
-        cmd = f'git remote add origin "{self.ssh_url}"'
-        cmds.append(cmd)
+        cmds = [
+            "git init",
+            f'git remote add origin "{self.ssh_url}"',
+        ]
 
         if self.git_depth:
-            cmd = f'{self.base_ssh} git fetch --quiet origin --depth {self.git_depth}'
+            cmds.append(f"{self.base_ssh} git fetch --quiet origin --depth {self.git_depth}")
         else:
-            cmd = f'{self.base_ssh} git fetch --quiet origin'
+            cmds.append(f"{self.base_ssh} git fetch --quiet origin")
 
-        cmds.append(cmd)
+        cmds.append(f"{self.base_ssh} git fetch --quiet origin {self.commit_hash}")
+        cmds.append(f"{self.base_ssh} git checkout --quiet -f {self.commit_hash}")
+        cmds.append("rm -rf .git")
 
-        if self.git_depth:
-            cmd = f'{self.base_ssh} git fetch --quiet --depth {self.git_depth} origin {self.commit_hash}'
-        else:
-            cmd = f'{self.base_ssh} git fetch --quiet origin {self.commit_hash}'
-
-        cmds.append(cmd)
-        cmd = f'{self.base_ssh} git checkout --quiet -f {self.commit_hash}'
-        cmds.extend((cmd, 'rm -rf .git'))
-        
-        for _cmd in cmds:
-            self.logger.debug("#" * 32)
-            self.logger.debug("")
-            self.logger.debug(_cmd)
-            self.logger.debug("")
-            system_exec(_cmd)
+        for cmd in cmds:
+            self.logger.debug(f"Executing: {cmd}")
+            system_exec(cmd)
 
         os.makedirs(self.clone_dir, exist_ok=True)
 
@@ -132,3 +138,44 @@ class CloneCheckOutCode:
                 self.logger.debug(f"Moved '{source_item}' to '{target_item}'.")
             except (shutil.Error, OSError, IOError) as e:
                 self.logger.debug(f"Error moving '{source_item}': {e}")
+
+    def get_repo_file(self, rel_file_path, file_type=None):
+        """
+        Reads a file as YAML, JSON, or raw text.
+
+        Args:
+            file_path (str): The path to the file.
+            file_type (str): The expected file type (yaml, json, etc.).
+
+        Returns:
+            dict or str: Parsed content if the file is YAML/JSON, else raw text.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        file_path = os.path.join(self.clone_dir, rel_file_path)
+
+        if not os.path.exists(file_path):
+            self.logger.warn(f"The file '{file_path}' does not exist.")
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+        except Exception as e:
+            self.logger.error(f"Error reading file '{file_path}': {e}")
+            return False
+
+        if file_type in ["yaml", "yml"]:
+            try:
+                return yaml.safe_load(content)
+            except yaml.YAMLError:
+                return content
+
+        elif file_type in ["json", "dict"]:
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return content
+        else:
+            return content

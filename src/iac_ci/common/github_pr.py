@@ -97,11 +97,6 @@ class GitHubRepo:
 
         url = f'https://github.com/{self.owner}/{self.repo_name}/raw/{commit_hash}/{file_path}'
 
-        # testtest456
-        print('y'*32)
-        print(url)
-        print('y'*32)
-
         response = requests.get(url, headers=self.headers)
 
         if response.status_code != 200:
