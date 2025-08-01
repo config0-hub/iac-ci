@@ -1,0 +1,336 @@
+#!/usr/bin/env python
+"""
+Module for handling S3 zip file extraction and environment variable loading.
+Provides functionality to download and extract zip files from S3, and load environment variables from encrypted files and SSM parameters.
+"""
+
+import shutil
+import base64
+import os
+import tempfile
+import zipfile
+import boto3
+from io import BytesIO
+
+class S3UnzipEnvVar:
+    """
+    A class to handle S3 zip file extraction and environment variable loading.
+
+    Attributes:
+        bucket_name (str): Name of the S3 bucket
+        bucket_key (str): Key of the zip file in S3
+        dest_dir (str): Destination directory for extraction
+        app_dir (str): Application directory path
+        env_vars (dict): Dictionary to store environment variables
+        base_file_path (str): Base path for extracted files
+    """
+
+    def __init__(self, bucket_name, bucket_key, dest_dir=None, app_dir=None):
+        """
+        Initialize S3UnzipEnvVar with bucket and directory information.
+
+        Args:
+            bucket_name (str): Name of the S3 bucket
+            bucket_key (str): Key of the zip file in S3
+            dest_dir (str, optional): Destination directory for extraction
+            app_dir (str, optional): Application directory path
+        """
+        self.bucket_name = bucket_name
+        self.bucket_key = bucket_key
+        self.env_vars = {}
+
+        self.ssm_helper = SSMHelper(env_vars=self.env_vars)
+
+        if dest_dir:
+            self.dest_dir = dest_dir
+        else:
+            self.dest_dir = tempfile.mkdtemp(prefix='/tmp/unzip_')
+
+        if app_dir:
+            self.app_dir = app_dir
+        elif os.environ.get("APP_DIR"):
+            self.app_dir=os.environ["APP_DIR"]
+        else:
+            self.app_dir = 'var/tmp/terraform'
+
+        if not os.path.exists(self.dest_dir):
+            os.makedirs(self.dest_dir)
+
+        self.base_file_path = os.path.join(self.dest_dir,
+                                          self.app_dir)
+
+    def _download_and_extract(self):
+        """
+        Download zip file from S3 and extract its contents.
+
+        Downloads the specified zip file from S3 into memory and extracts it
+        to the destination directory.
+        """
+        # Initialize S3 client
+        s3 = boto3.client('s3')
+
+        # Download zip file into memory
+        zip_file_obj = BytesIO()
+
+        s3.download_fileobj(self.bucket_name,
+                            self.bucket_key,
+                            zip_file_obj)
+
+        zip_file_obj.seek(0)
+
+        with zipfile.ZipFile(zip_file_obj, 'r') as zip_ref:
+            zip_ref.extractall(self.dest_dir)
+
+    def _load_env_vars(self):
+        """
+        Load environment variables from encrypted files.
+
+        Reads and decodes environment variables from build_env_vars.env.enc
+        and ssm.env.enc files in the extracted directory.
+        """
+        build_file_path = f'{self.base_file_path}/build_env_vars.env.enc'
+        ssm_file_path = f'{self.base_file_path}/ssm.env.enc'
+
+        for _file in [ build_file_path, ssm_file_path ]:
+            if not os.path.exists(_file):
+                print(f'# env_var file: "{_file}" not found')
+                continue
+            print(f'# env_var file: "{_file}" found')
+
+            with open(_file, 'rb') as enc_file:
+                encoded_content = enc_file.read()
+                decoded_content = base64.b64decode(encoded_content)
+                env_var_lines = decoded_content.decode('utf-8').strip().splitlines()
+
+                for line in env_var_lines:
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        print(f'# _load_env_vars: env var "{key}" from {_file})')
+                        self.env_vars[key.strip()] = value.strip()
+
+    def _load_ssm_parameters(self):
+        """
+        Load SSM parameters from AWS Systems Manager.
+
+        Retrieves and processes SSM parameters specified in environment variables
+        or previously loaded environment variables.
+        """
+        ssm_names = os.environ.get("SSM_NAMES")
+        ssm_name = os.environ.get("SSM_NAME")
+
+        if not ssm_names:
+            ssm_names = self.env_vars.get("SSM_NAMES")
+
+        if not ssm_name:
+            ssm_name = self.env_vars.get("SSM_NAME")
+
+        additional_ssm_names = self.env_vars.get("ADD_SSM_NAMES")
+
+        if additional_ssm_names:
+            try:
+                additional_ssm_names = [name.strip() for name in additional_ssm_names.split(',')]
+            except:
+                additional_ssm_names = [additional_ssm_names]
+
+        parameter_names = []
+
+        if ssm_names:
+            # Split the comma-delimited string into a list
+            parameter_names = [name.strip() for name in ssm_names.split(',')]
+
+        if ssm_name:
+            if ssm_name not in parameter_names:
+                parameter_names.append(ssm_name)
+
+        if additional_ssm_names:
+            self.ssm_helper.retrieve_ssm_parameters(additional_ssm_names,
+                                                    set_in_env=True)
+
+        if parameter_names:
+            self.ssm_helper.retrieve_ssm_parameters(parameter_names)
+
+    def _get_env_vars(self):
+        """
+        Get the loaded environment variables.
+
+        Returns:
+            dict: Dictionary of loaded environment variables
+        """
+        return self.env_vars
+
+    def run(self):
+        """
+        Execute the complete workflow of downloading, extracting, and loading variables.
+
+        Returns:
+            dict: Dictionary of all loaded environment variables
+        """
+        self._download_and_extract()
+        self._load_env_vars()
+        self._load_ssm_parameters()
+
+        return self._get_env_vars()
+
+class SSMHelper:
+
+    def __init__(self, env_vars=None):
+
+        if env_vars:
+            self.env_vars = env_vars
+        else:
+            self.env_vars = {}
+
+        self.ssm_client = boto3.client('ssm')
+
+    def retrieve_ssm_parameters(self, parameter_names, set_in_env=None):
+        """
+        Retrieve multiple SSM parameters.
+
+        Args:
+            parameter_names (list): List of SSM parameter names to retrieve
+        """
+        for name in parameter_names:
+            print(f'# Retrieving ssm_name: "{name}"')
+            try:
+                self.get_and_parse_ssm_param(name,set_in_env,insert=True)
+            except Exception as e:
+                print(f"# Error retrieving parameter {name}: {e}")
+
+    def get_key_value_from_line(self,line):
+
+        # Strip whitespace and ignore empty lines or comments
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return
+
+        # Remove 'export ' if it exists
+        if line.startswith('export '):
+            line = line[len('export '):]
+
+        # Ensure the line contains an '=' character
+        if '=' not in line:
+            return
+
+        try:
+            key_value = line.split('=', 1)
+        except Exception:
+            print('WARN: could not split the line by "="')
+            return
+
+        try:
+            key = key_value[0].strip()
+        except Exception:
+            print('WARN: could not strip or get "key" for env var')
+            return
+
+        try:
+            value = key_value[1].strip().strip('\"')  # Remove quotes if present
+        except Exception:
+            print('WARN: could not strip or get "value" for env var')
+            return
+
+        return key,value
+
+    def _insert_env_var_lines(self, env_var_lines, set_in_env=None):
+        """
+        Process and insert environment variable lines into env_vars dictionary.
+
+        Args:
+            env_var_lines (list): List of environment variable lines to process
+
+        Returns:
+            dict: Updated environment variables dictionary
+        """
+
+        print("#" * 32)
+        for line in env_var_lines:
+            key_values = self.get_key_value_from_line(line)
+            if not key_values:
+                continue
+            key = key_values[0]
+            value = key_values[1]
+            print(f'# added env variable "{key}" to env_vars')
+            self.env_vars[key] = value
+            if set_in_env:
+                print(f'# setting env variable "{key}" to os.environ')
+                os.environ[key] = f"{value}"
+                # we will automatically set the github token into .netrc
+                if key == "GITHUB_TOKEN":
+                    self.create_netrc_file(value)
+        print("#" * 32)
+        return self.env_vars
+
+    def get_and_parse_ssm_param(self, name, set_in_env=None, insert=None):
+        """
+        Retrieve and parse a single SSM parameter.
+
+        Args:
+            name (str): Name of the SSM parameter to retrieve
+        """
+        response = self.ssm_client.get_parameter(Name=name,
+                                                 WithDecryption=True)
+        # Decode the base64 encoded value
+        decoded_value = base64.b64decode(response['Parameter']['Value'])
+
+        # Convert bytes to string and split into lines
+        env_var_lines = decoded_value.decode('utf-8').strip().splitlines()
+
+        # Add to env_vars dictionary
+        if insert:
+            self._insert_env_var_lines(env_var_lines, set_in_env)
+
+    @staticmethod
+    def create_netrc_file(github_token, get_base_64=None):
+        """
+        Creates a .netrc file with GitHub credentials for HTTPS authentication.
+
+        Args:
+            github_token (str): The GitHub Personal Access Token (PAT).
+            get_base_64 (bool, optional): If True, process the file for base64 encoding.
+
+        Returns:
+            str: The absolute path of the created .netrc file or base64 string if get_base_64 is True.
+        """
+        file_path = "/tmp/.netrc"
+
+        # Try to create the original .netrc file
+        try:
+            with open(file_path, "w") as netrc_file:
+                netrc_file.write("machine github.com\n")
+                netrc_file.write(f"login {github_token}\n")
+                netrc_file.write("password x-oauth-basic\n")
+
+            # Set secure file permissions (read/write for owner only)
+            os.chmod(file_path, 0o600)
+            print(f"# .netrc file created successfully at {file_path}")
+
+        except Exception as e:
+            print(f"# ERROR creating original .netrc file: {e}")
+            return None
+
+        # Handle base64 encoding if requested
+        if get_base_64:
+            try:
+                import base64
+                with open(file_path, "rb") as f:
+                    encoded_content = base64.b64encode(f.read()).decode("utf-8")
+                return encoded_content
+            except Exception as e:
+                print(f"# ERROR encoding the .netrc file to base64: {e}")
+                return None
+
+        # Copy the .netrc file to multiple target paths
+        target_paths = ["/tmp/.netrc", os.path.expanduser("~/.netrc"), "/tmp/lambda/.netrc"]
+        for target_path in target_paths:
+            target_dir = os.path.dirname(os.path.expanduser(target_path))
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir)
+            try:
+                shutil.copy(file_path, os.path.expanduser(target_path))
+                print(f"# Copied .netrc file to {target_path}")
+            except Exception as e:
+                print(f"# ERROR copying .netrc file to {target_path}: {e}")
+                continue
+
+        # Return the expanded file path for ~/.netrc
+        return os.path.expanduser("~/.netrc")

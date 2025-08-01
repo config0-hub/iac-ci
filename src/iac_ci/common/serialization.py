@@ -24,16 +24,6 @@ import json
 import base64
 from typing import Any, Dict, Union
 
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives import padding, hashes
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.fernet import Fernet
-except ImportError:
-    print("Could not import cryptography")
-
-
 def b64_encode(obj: Any) -> str:
     """
     Encode an object or string to base64.
