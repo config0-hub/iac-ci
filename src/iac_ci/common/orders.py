@@ -1414,6 +1414,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         try:
             setup_info = self._setup()
+
         except Exception:
             setup_info = {"status": False}
             failed_message = traceback.format_exc()
@@ -1558,7 +1559,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             "commit_hash": self.webhook_info["commit_hash"]
         }
 
-        # TODO - will we need SSM_NAMES plural?
         if self.ssm_name:
             cinputargs["ssm_name"] = self.ssm_name
 

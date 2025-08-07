@@ -85,7 +85,7 @@ class CreateTempParamStoreEntry:
 
         return json.dumps(policy)
 
-    def _put_advance_param(self, name, value):
+    def put_advance_param(self, name, value):
         """
         Put a parameter in SSM Parameter Store with advanced features.
 
@@ -171,10 +171,9 @@ class CreateTempParamStoreEntry:
         new_base64_env = base64.b64encode(new_env_string.encode('utf-8')).decode('utf-8')
         random_suffix = str(uuid.uuid4())
         new_ssm_name = f"{self.ssm_tmp_prefix}/{random_suffix}"
-        self._put_advance_param(new_ssm_name, new_base64_env)
+        self.put_advance_param(new_ssm_name, new_base64_env)
 
         return new_ssm_name
-
 
 class Notification:
     """
@@ -506,6 +505,23 @@ class GetFrmDb:
             self.logger.debug(f"found trigger info for repo {repo_name}")
 
         return items
+
+    def update_iac_ci_folders(self, iac_ci_id, folders):
+
+        """
+        Update or create the iac_ci_folders field for the given iac_ci_id with the provided list of folders.
+        """
+        match = {"_id": iac_ci_id}
+        update_expression = "SET iac_ci_folders = :folders"
+        expression_attribute_values = {
+            ":folders": folders
+        }
+
+        return self.table_settings.update(match,
+                                          update_expression,
+                                          expression_attribute_values,
+                                          total_retries=2,
+                                          wait_int=2)
 
     def get_iac_info(self, iac_ci_id):
         """

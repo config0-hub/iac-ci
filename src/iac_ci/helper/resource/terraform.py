@@ -22,6 +22,7 @@ This module provides utilities for executing Terraform commands in AWS environme
 
 import os
 
+from iac_ci.common.serialization import b64_encode
 from iac_ci.s3_unzip_and_env_vars import SSMHelper
 from iac_ci.helper.resource.tfinstaller import get_tf_install
 from iac_ci.helper.resource.common import TFAppHelper
@@ -55,7 +56,9 @@ class TFCmdOnAWS(TFAppHelper):
         self.envfile = kwargs["envfile"]  # e.g. build_env_vars.env
         self.tf_bucket_path = kwargs["tf_bucket_path"]
         self.run_share_dir = kwargs["run_share_dir"]
+        self.add_ssm_names = kwargs.get("add_ssm_names")
         self.ssm_tmp_dir = "/tmp"
+        self.ssm_names_b64 = None
 
         TFAppHelper.__init__(
             self,
@@ -97,31 +100,35 @@ class TFCmdOnAWS(TFAppHelper):
             return ['echo $SSM_VALUE | base64 -d >> $TMPDIR/.ssm_value']
 
     def _get_add_ssm_names(self):
-        additional_ssm_names = os.environ.get("ADD_SSM_NAMES")
 
-        if not additional_ssm_names:
+        if not self.add_ssm_names:
             return
 
         try:
-            additional_ssm_names = [name.strip() for name in additional_ssm_names.split(',')]
+            additional_ssm_names = [name.strip() for name in self.add_ssm_names.split(',')]
         except:
-            additional_ssm_names = [additional_ssm_names]
+            additional_ssm_names = [self.add_ssm_names]
 
         ssm_helper = SSMHelper()
 
         ssm_value_lines = []
 
         for additional_ssm_name in additional_ssm_names:
-            ssm_value_lines.extend(ssm_helper.get_and_parse_ssm_param(additional_ssm_name,
-                                   set_in_env=False,
-                                   insert=False))
+            self.logger.debug(f'fetching ssm value from ssm name "{additional_ssm_name}"')
+            _ssm_value = ssm_helper.get_and_parse_ssm_param(additional_ssm_name,
+                                                            set_in_env=False,
+                                                            insert=False)
+            ssm_value_lines.extend(_ssm_value)
 
-        cmds = []
+        cmds = ["#!/bin/bash", ""]
 
         for num, ssm_value_line in enumerate(ssm_value_lines, start=1):
             key_value = ssm_helper.get_key_value_from_line(ssm_value_line)
             if not key_value:
                 continue  # Skip lines that can't be parsed
+
+            if ssm_value_line.startswith('export '):
+                ssm_value_line = ssm_value_line[len('export '):]
 
             key, value = key_value
             if key == "GITHUB_TOKEN":
@@ -131,9 +138,9 @@ class TFCmdOnAWS(TFAppHelper):
                     f'echo "{base64_str}" | base64 -d > ~/.netrc'
                 ])
             elif num == 1:
-                cmds.append(f'echo {ssm_value_line} > $TMPDIR/.ssm_values')
+                cmds.append(f'echo "{ssm_value_line}" > $TMPDIR/.ssm_values')
             else:
-                cmds.append(f'echo {ssm_value_line} >> $TMPDIR/.ssm_values')
+                cmds.append(f'echo "{ssm_value_line}" >> $TMPDIR/.ssm_values')
 
         return cmds
 
@@ -154,6 +161,14 @@ class TFCmdOnAWS(TFAppHelper):
             ssm_cmd,
         ]
 
+    def set_ssm_names(self):
+
+        try:
+            add_ssm_names_content = "\n".join(self._get_add_ssm_names())
+            self.ssm_names_b64 = b64_encode(add_ssm_names_content)
+        except:
+            self.ssm_names_b64 = None
+
     def load_env_files(self):
         """
         Load environment files and SSM parameters.
@@ -171,13 +186,12 @@ class TFCmdOnAWS(TFAppHelper):
         cmds.extend(self._get_ssm_concat_cmds())
         cmds.extend(self._set_src_envfiles_cmd())
 
-        add_cmds = self._get_add_ssm_names()
-
         # Only extend if add_cmds is not None
-        if add_cmds:
-            cmds.extend(add_cmds)
+        if self.ssm_names_b64:
+            cmds.append('echo $SSM_SCRIPT_VALUE | base64 -d >> $TMPDIR/.addd_ssm_names_script')
+            cmds.append('chmod 755 $TMPDIR/.addd_ssm_names_script')
+            cmds.append('$TMPDIR/.addd_ssm_names_script')
             cmds.append('if [ -f $TMPDIR/.ssm_values ]; then cd $TMPDIR/; . ./.ssm_values; fi')
-
         return cmds
 
     def s3_tfpkg_to_local(self):

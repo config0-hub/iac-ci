@@ -279,6 +279,8 @@ class SSMHelper:
         if insert:
             self._insert_env_var_lines(env_var_lines, set_in_env)
 
+        return env_var_lines
+
     @staticmethod
     def create_netrc_file(github_token, get_base_64=None):
         """

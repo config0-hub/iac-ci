@@ -73,6 +73,9 @@ class TriggerCodebuild(PlatformReporter):
         if self.build_env_vars.get("CODEBUILD_IMAGE_TYPE"):
             cinputargs["image_type"] = self.build_env_vars["CODEBUILD_IMAGE_TYPE"]
 
+        if self.build_env_vars.get("ADD_SSM_NAMES"):
+            cinputargs["add_ssm_names"] = self.build_env_vars["ADD_SSM_NAMES"]
+
         if os.environ.get("DEBUG_IAC_CI"):
             self.logger.debug("#" * 32)
             self.logger.debug("# cinputargs")

@@ -14,11 +14,15 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import boto3
+import uuid
 import os
+
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.helper.cloud.aws.codebuild import CodebuildResourceHelper
 from iac_ci.helper.resource.aws import TFAwsBaseBuildParams
 from iac_ci.helper.resource.terraform import TFCmdOnAWS
+from iac_ci.common.run_helper import CreateTempParamStoreEntry
 
 
 class CodebuildParams(TFAwsBaseBuildParams):
@@ -94,7 +98,7 @@ class CodebuildParams(TFAwsBaseBuildParams):
         return self.buildparams
 
 
-class Codebuild(CodebuildParams):
+class Codebuild(CodebuildParams, CreateTempParamStoreEntry):
     """
     Class for managing AWS CodeBuild projects and buildspec generation.
     Inherits from CodebuildParams.
@@ -111,6 +115,10 @@ class Codebuild(CodebuildParams):
 
         CodebuildParams.__init__(self, **kwargs)
 
+        session = boto3.Session()
+        self.ssm = session.client('ssm')
+        CreateTempParamStoreEntry.__init__(self)
+
         self.tfcmds = TFCmdOnAWS(runtime_env="codebuild",
                                  run_share_dir=self.run_share_dir,
                                  app_dir=self.app_dir,
@@ -118,8 +126,11 @@ class Codebuild(CodebuildParams):
                                  binary=self.binary,
                                  version=self.version,
                                  tf_bucket_path=self.tf_bucket_path,
+                                 add_ssm_names=kwargs.get("add_ssm_names"),
                                  arch="linux_amd64"
                                  )
+
+        self.add_ssm_names_path = None
 
     @staticmethod
     def _add_cmds(contents, cmds):
@@ -200,6 +211,15 @@ class Codebuild(CodebuildParams):
         Returns:
             str: Initial buildspec YAML content
         """
+
+        self.tfcmds.set_ssm_names()
+
+        if self.tfcmds.ssm_names_b64:
+            random_suffix = str(uuid.uuid4())
+            self.add_ssm_names_path = f"{self.ssm_tmp_prefix}/{random_suffix}"
+            self.put_advance_param(self.add_ssm_names_path,
+                                   self.tfcmds.ssm_names_b64)
+
         contents = f'''
 version: 0.2
 env:
@@ -207,11 +227,26 @@ env:
     TMPDIR: /tmp
     TF_PATH: /usr/local/bin/{self.binary}
 '''
-        if self.ssm_name:
+        if self.ssm_name and self.add_ssm_names_path:
+            ssm_params_content = f'''
+  parameter-store:
+    SSM_VALUE: {self.ssm_name}
+    SSM_SCRIPT_VALUE: {self.add_ssm_names_path}
+'''
+        elif self.ssm_name:
             ssm_params_content = f'''
   parameter-store:
     SSM_VALUE: {self.ssm_name}
 '''
+        elif self.add_ssm_names_path:
+            ssm_params_content = f'''
+  parameter-store:
+    ADD_SSM_NAMES: {self.add_ssm_names_path}
+'''
+        else:
+            ssm_params_content = None
+
+        if ssm_params_content:
             contents = f"{contents}{ssm_params_content}"
 
         return f"{contents}\nphases:\n"

@@ -33,6 +33,7 @@ from iac_ci.common.serialization import b64_encode
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.gitclone import CloneCheckOutCode
+from iac_ci.common.utilities import get_hash
 
 class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     """
@@ -73,9 +74,10 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         self.github_repo = None
         self.webhook_info = self._get_webhook_info()
 
-        CloneCheckOutCode.__init__(self,
-                                   ssh_url=self.webhook_info.get("ssh_url"),
-                                   commit_hash=self.webhook_info["commit_hash"])
+        if self.webhook_info.get("commit_hash"):
+            CloneCheckOutCode.__init__(self,
+                                       ssh_url=self.webhook_info.get("ssh_url"),
+                                       commit_hash=self.webhook_info["commit_hash"])
 
         if self.event.get("path"):
             self.webhook_info["trigger_id"] = self.event["path"].split("/")[-1]  # get trigger_id from url
@@ -772,13 +774,36 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         return
 
+    def _pr_id(self):
+
+        # Create the concatenated string using an f-string
+        concatenated_string = f"{self.webhook_info['repo_name']}:{self.webhook_info['owner']}:{self.webhook_info['pr_number']}"
+
+        # Encode the string to base64
+        encoded_bytes = base64.b64encode(concatenated_string.encode("utf-8"))
+
+        # Decode the bytes to string and extract the substring
+        return encoded_bytes.decode("utf-8")[1:12]
+
     def _get_iac_ci_folder(self):
 
         # check directories
         changed_dirs = self._get_changed_dirs()
 
         iac_ci_folder = self.iac_ci_info.get("iac_ci_folder")
-        #iac_ci_folders = [ iac_ci_folder.strip() for iac_ci_folder in self.iac_ci_info.get("iac_ci_folders").split(",") ]
+
+        if iac_ci_folder:
+            return {
+                "iac_ci_folder": iac_ci_folder,
+                "status": True
+            }
+
+        pr_id = self._pr_id()
+
+        try:
+            iac_ci_folder = self.db.table_runs.search_key(key="_id", value=pr_id)["Items"][0]["iac_ci_folder"]
+        except IndexError:
+            iac_ci_folder = None
 
         if iac_ci_folder:
             return {
@@ -809,6 +834,26 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         iac_ci_folder = match_folders[0]
 
+        # if it got this far, then it is probably
+        # the first time it is registered the pr_id
+        values = {
+            "_id": pr_id,
+            "pr_id": pr_id,
+            "iac_ci_folder": iac_ci_folder,
+            "repo_name": self.webhook_info['repo_name'],
+            "repo_owner": self.webhook_info['owner'],
+            "pr_number": self.webhook_info['pr_number'],
+            "checkin": int(time()),  # Removed the extra "="
+            "expire_at": int(time()) + 604800,  # 7 days (604800 seconds) from now
+            "iac_ci_id": self.iac_ci_id
+        }
+
+        if self.webhook_info.get("branch"):
+            values["branch"] = self.webhook_info["branch"]
+
+        self.logger.debug(f'registering pr_number: "{self.webhook_info["pr_number"]}", iac_ci_folder: "{iac_ci_folder}"')
+        self.db.table_runs.insert(values)
+
         self.logger.debug(f"iac_ci_folder: {iac_ci_folder}")
 
         return {
@@ -829,28 +874,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         Note: Event type checking is now primarily performed in app.py, but we keep
         a backup check here for safety during the transition.
         """
-
-        failed_message = None
-        iac_ci_folder = None
-        try:
-            iac_folder_info = self._get_iac_ci_folder()
-            if not iac_folder_info.get("status"):
-                failed_message = iac_folder_info.get("failed_message")
-            iac_ci_folder = iac_folder_info["iac_ci_folder"]
-            self.logger.debug("#"*32)
-            self.logger.debug(f"# iac_ci_folder used is: {iac_ci_folder}")
-            self.logger.debug("#"*32)
-        except Exception:
-            failed_message = traceback.format_exc()
-
-        if failed_message:
-            self.logger.error(failed_message)
-            self.results["status"] = None
-            self.results["initialized"] = None
-            self.results["msg"] = failed_message
-            self.add_log(self.results["msg"])
-            return False
-
+        
         # Backup check for event type - primarily done in app.py now
         msg = self._chk_event()
 
@@ -897,6 +921,29 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.results["status"] = None
             self.results["initialized"] = None
             self.results["msg"] = "action cannot be evaluated"
+            self.add_log(self.results["msg"])
+            return False
+
+        failed_message = None
+        iac_ci_folder = None
+
+        try:
+            iac_folder_info = self._get_iac_ci_folder()
+            if not iac_folder_info.get("status"):
+                failed_message = iac_folder_info.get("failed_message")
+            else:
+                iac_ci_folder = iac_folder_info["iac_ci_folder"]
+                self.logger.debug("#"*32)
+                self.logger.debug(f"# iac_ci_folder used is: {iac_ci_folder}")
+                self.logger.debug("#"*32)
+        except Exception:
+            failed_message = traceback.format_exc()
+
+        if failed_message:
+            self.logger.error(failed_message)
+            self.results["status"] = None
+            self.results["initialized"] = None
+            self.results["msg"] = failed_message
             self.add_log(self.results["msg"])
             return False
 
