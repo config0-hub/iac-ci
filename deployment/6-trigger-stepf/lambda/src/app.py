@@ -42,11 +42,17 @@ BASIC_EVENTS = [
 ]
 
 # Valid actions for issue comments
-VALID_ACTIONS = ["check", "destroy", "apply", "validate", "drift", "regenerate", "ci"]
+VALID_ACTIONS = [ "plan",
+                  "check",
+                  "destroy",
+                  "apply",
+                  "validate",
+                  "drift",
+                  "regenerate" ]
 
 def _write_execution_arn_to_db(search_str, execution_arn):
     dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-settings')
+    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-runs')
     table = dynamodb.Table(table_name)
 
     item = {
@@ -64,7 +70,7 @@ def _write_execution_arn_to_db(search_str, execution_arn):
 
 def get_webhook_secret(trigger_id):
     dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-settings')
+    table_name = os.environ.get('DYNAMODB_TABLE_SETTINGS','iac-ci-settings')
     table = dynamodb.Table(table_name)
 
     response = table.get_item(Key={'_id': trigger_id})

@@ -71,6 +71,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             "issue_comment"
         ]
 
+        self.plan_destroy = None
         self.github_repo = None
         self.webhook_info = self._get_webhook_info()
 
@@ -559,6 +560,9 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         values["_id"] = self.run_id
         values["run_id"] = self.run_id
 
+        if self.plan_destroy:
+            values["plan_destroy"] = True
+
         if self.run_info.get("iac_ci_folder"):
             values["iac_ci_folder"] = self.run_info["iac_ci_folder"]
 
@@ -590,14 +594,22 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         """
         Evaluate the IaC action to be performed based on the webhook comment.
 
-        This method checks the webhook comment for an action command (check, destroy, apply, validate, drift, regenerate).
+        This method checks the webhook comment for an action command (check, plan, destroy, apply, validate, drift, regenerate).
         It compares the command with the configured action string in the database.
         For "apply" actions, it also checks if approval is required and if the PR is approved.
 
         Returns:
             dict: A dictionary containing the action, status, and optional message or failed message.
         """
-        actions = ["check", "destroy", "apply", "validate", "drift", "regenerate" ]
+        actions = [
+            "plan",
+            "check",
+            "destroy",
+            "apply",
+            "validate",
+            "drift",
+            "regenerate"
+        ]
 
         if self.webhook_info.get("event_type") != "issue_comment":
             self.logger.debug('event_type is not an issue_comment - return default check')
@@ -632,45 +644,66 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                 "status": False
             }
 
+
         for action in actions:
+
             if action != comment_params[0]:
                 self.logger.debug(f'evaluating action: "{action}" != comment action: "{comment_params[0]}"')
                 continue
 
+            if comment_params[0] in ["plan", "validate", "regenerate", "drift"]:
+                db_key = "check_str"
+                action_chk = "check"
+            else:
+                db_key = f"{action}_str"
+                action_chk = action
+
             # only match one
-            if not self.iac_ci_info.get(f"{action}_str"):
-                failed_message = f'key "{action}_str" not set in db - required to enable iac-ci with vcs comments'
+            if not self.iac_ci_info.get(db_key):
+                failed_message = f'key "{db_key}" not set in db - required to enable iac-ci with vcs comments'
                 return {
                     "failed_message": failed_message,
                     "status": False
                 }
 
             try:
-                _db_params = [_db_param.strip() for _db_param in (self.iac_ci_info.get(f"{action}_str").strip()).split(" ")]
+                _db_params = [_db_param.strip() for _db_param in (self.iac_ci_info.get(f"{db_key}").strip()).split(" ")]
             except AttributeError:
                 _db_params = None
 
             if not _db_params:
                 return {
-                    "failed_message": f'issue parsing element "{action}_str" in db',
+                    "failed_message": f'issue parsing element "{db_key}" in db',
                     "status": False
                 }
 
             self.logger.debug(f'_eval_iac_action: evaluating action {action} with comment str {comment_params}/ db params "{_db_params}" with action {action}')
 
-            if _db_params[0] != action:
-                failed_message = f'the first element of field "{action}_str" = "{_db_params[0]}" != "{action}"'
+            if _db_params[0] != action_chk:
+                failed_message = f'the first element of field "{db_key}" = "{_db_params[0]}" != "{action}"'
                 return {
                     "failed_message": failed_message,
                     "status": False
                 }
 
+            if action in ["check", "plan" ] and comment_params[1] == "destroy":
+                comment_check = comment_params[2]
+                self.plan_destroy = True
+            else:
+                comment_check = comment_params[1]
+
             # second element
-            if _db_params[1] != comment_params[1]:
-                failed_message = f'action: "{action}"\n\nvcs comment "{action} {comment_params[1]}" but expected "{action} {_db_params[1]}"'
+            if _db_params[1] != comment_check:
+                failed_message = f'action: "{action}"\n\nvcs comment "{action} {comment_check}" but expected "{action} {_db_params[1]}"'
                 return {
                     "failed_message": failed_message,
                     "status": False
+                }
+
+            if self.plan_destroy or action_chk == "check":
+                return {
+                    "action": action_chk,
+                    "status": True
                 }
 
             if action != "apply":

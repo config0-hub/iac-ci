@@ -210,7 +210,7 @@ class Lambdabuild(LambdaParams):
 
         if self.method in ["create", "apply"]:
             cmds = self.tfcmds.get_tf_apply()
-        elif self.method in [ "ci", "check", "regenerate"]:
+        elif self.method in [ "ci", "check", "regenerate", "plan"]:
             cmds = [ self.tfsec_cmds.backup_s3_file(suffix="out") ]
             cmds.append(self.tfsec_cmds.backup_s3_file(suffix="json"))
             cmds.append(self.infracost_cmds.backup_s3_file(suffix="out"))
@@ -219,6 +219,8 @@ class Lambdabuild(LambdaParams):
             cmds.extend(self.tfcmds.get_tf_ci())
             cmds.extend(tfsec_cmds)
             cmds.extend(infracost_cmds)
+        elif self.method in ["plan_destroy"]:
+            cmds = self.tfcmds.get_tf_plan_destroy()
         elif self.method == "pre-create":
             cmds = self.tfcmds.get_tf_pre_create()
         elif self.method in ["validate", "drift"]:

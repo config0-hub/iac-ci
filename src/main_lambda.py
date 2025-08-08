@@ -56,7 +56,16 @@ class TriggerLambdabuild(PlatformReporter):
         Returns:
             A dictionary with the results of the build.
         """
-        cinputargs = self.get_aws_exec_cinputargs(method=method)
+
+        try:
+            plan_destroy = self.run_info["plan_destroy"]
+        except:
+            plan_destroy = None
+
+        if plan_destroy:
+            cinputargs = self.get_aws_exec_cinputargs(method="plan_destroy")
+        else:
+            cinputargs = self.get_aws_exec_cinputargs(method=method)
 
         if self.infracost_api_key:
             cinputargs["infracost_api_key"] = self.infracost_api_key

@@ -238,20 +238,26 @@ class TFCmdOnAWS(TFAppHelper):
 
         return cmds
 
-    def _get_tf_plan(self,last_apply=None):
+    def _get_tf_plan(self,last_apply=None,destroy=None):
         """Get Terraform plan commands"""
 
         status_file = "status.tf_plan.failed.code"
+
+        plan_cmd = "plan"
+
+        if destroy:
+            plan_cmd = f'plan -destroy'
+
         # output cmds
         cmds = [
-            f'{self.base_cmd} plan -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1 || echo $? > {status_file}',
+            f'{self.base_cmd} {plan_cmd} -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1 || echo $? > {status_file}',
             f'cat {self.tmp_base_output_file}.tfplan.out'
         ]
         self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply)
         cmds.append(f'if [ -f {status_file} ]; then rm -f {status_file}; exit 10; fi')
 
         # plan cmds
-        plan_cmds = [ f'{self.base_cmd} plan -out={self.tmp_base_output_file}.tfplan' ]
+        plan_cmds = [ f'{self.base_cmd} {plan_cmd} -out={self.tmp_base_output_file}.tfplan' ]
         self.wrapper_cmds_to_s3(plan_cmds, suffix="tfplan", last_apply=last_apply)
 
         cmds.extend(plan_cmds)
@@ -306,6 +312,13 @@ class TFCmdOnAWS(TFAppHelper):
         """Get commands for destroying Terraform resources"""
         cmds = self._get_tf_init(last_apply=True)
         cmds.append(f'{self.base_cmd} destroy -auto-approve')
+        return cmds
+
+    def get_tf_plan_destroy(self):
+        """Get commands for destroying Terraform resources"""
+        cmds = self._get_tf_init()
+        cmds.extend(self._get_tf_validate())
+        cmds.extend(self._get_tf_plan(destroy=True))
         return cmds
 
     def get_tf_chk_drift(self):
