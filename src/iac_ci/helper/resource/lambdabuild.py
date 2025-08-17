@@ -210,7 +210,7 @@ class Lambdabuild(LambdaParams):
 
         if self.method in ["create", "apply"]:
             cmds = self.tfcmds.get_tf_apply()
-        elif self.method in [ "ci", "check", "regenerate", "plan"]:
+        elif self.method in [ "ci", "check", "plan"]:
             cmds = [ self.tfsec_cmds.backup_s3_file(suffix="out") ]
             cmds.append(self.tfsec_cmds.backup_s3_file(suffix="json"))
             cmds.append(self.infracost_cmds.backup_s3_file(suffix="out"))

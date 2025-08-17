@@ -16,12 +16,10 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
-import yaml
 import contextlib
 import os
 import json
 import traceback
-import requests
 import base64
 from time import time
 from time import sleep
@@ -33,7 +31,9 @@ from iac_ci.common.serialization import b64_encode
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.gitclone import CloneCheckOutCode
-from iac_ci.common.utilities import get_hash
+from iac_ci.common.serialization import b64_decode
+from iac_ci.common.utilities import id_generator
+
 
 class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     """
@@ -64,14 +64,31 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         self.expire_at = int(os.environ.get("BUILD_TTL", "3600"))
         self.init_failure = None
 
-        self.basic_events = [
-            "push",
-            "apply",
-            "pull_request",
-            "issue_comment"
-        ]
+        try:
+            self.basic_events = b64_decode(os.environ['BASIC_EVENTS_B64'])
+        except:
+            self.basic_events = [
+                "push",
+                "apply",
+                "pull_request",
+                "issue_comment"
+            ]
+
+        try:
+            self.valid_actions = b64_decode(os.environ['VALID_ACTIONS_B64'])
+        except:
+            # Valid actions for issue comments
+            self.valid_actions = [
+                "plan",
+                "check",
+                "destroy",
+                "apply",
+                "validate",
+                "report"
+            ]
 
         self.plan_destroy = None
+        self.report_folders = None
         self.github_repo = None
         self.webhook_info = self._get_webhook_info()
 
@@ -511,7 +528,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             "msg": msg
         }
 
-    def _save_run_info(self):
+    def _eval_init_save_run_info(self):
         """
         Save run information to the database.
 
@@ -557,24 +574,17 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         values["checkin"] = int(time())
         values["expire_at"] = values["checkin"] + self.expire_at
         values["phases"] = [self.phase]
+
         values["_id"] = self.run_id
         values["run_id"] = self.run_id
-
-        if self.plan_destroy:
-            values["plan_destroy"] = True
-
-        if self.run_info.get("iac_ci_folder"):
-            values["iac_ci_folder"] = self.run_info["iac_ci_folder"]
-
+        
         if self.iac_ci_id:
             values["iac_ci_id"] = self.iac_ci_id
-
+            
         if self.webhook_info:
             values["webhook_info_hash"] = b64_encode(self.webhook_info)
-
             if self.webhook_info.get("commit_hash"):
                 values["commit_hash"] = self.webhook_info["commit_hash"]
-
             values["status"] = "in_progress"
         else:
             values["status"] = "failed"
@@ -583,34 +593,65 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                 values["failed_message"] = str(self.results["traceback"])
                 del values["traceback"]
 
+        return values
+
+    def _save_run_info(self):
+
+        values = self._eval_init_save_run_info()
+
+        if values["status"] == "failed":
+            self.db.table_runs.insert(values)
+            return {
+                "status": False,
+                "failed_message": values.get("failed_message", "unknown error")
+            }
+
+        if not self.report_folders:
+            if self.plan_destroy:
+                values["plan_destroy"] = True
+            if self.run_info.get("iac_ci_folder"):
+                values["iac_ci_folder"] = self.run_info["iac_ci_folder"]
+            self.db.table_runs.insert(values)
+            msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"
+            self.add_log(msg)
+            return { "status": True }
+
+        # testtest456
+        # this is map report_folders inputs
+        parallel_folder_builds = {}
+
+        for folder in self.report_folders:
+            _values = deepcopy(values)
+            _values["parent_run_id"] = self.run_id
+
+            p_run_id = new_run_id()
+            parallel_folder_builds[p_run_id] = iac_ci_folder
+
+            _values["_id"] = p_run_id
+            _values["run_id"] = p_run_id
+            _values["iac_ci_folder"] = folder
+            self.db.table_runs.insert(_values)
+
+        values["parallel_folder_builds"] = parallel_folder_builds
+
         self.db.table_runs.insert(values)
 
-        msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"
-        self.add_log(msg)
-
-        return
+        return {
+            "status": True,
+            "parallel_folder_builds": parallel_folder_builds
+        }
 
     def _eval_iac_action(self):
         """
         Evaluate the IaC action to be performed based on the webhook comment.
 
-        This method checks the webhook comment for an action command (check, plan, destroy, apply, validate, drift, regenerate).
+        This method checks the webhook comment for an action command (check, plan, destroy, apply, validate, drift).
         It compares the command with the configured action string in the database.
         For "apply" actions, it also checks if approval is required and if the PR is approved.
 
         Returns:
             dict: A dictionary containing the action, status, and optional message or failed message.
         """
-        actions = [
-            "plan",
-            "check",
-            "destroy",
-            "apply",
-            "validate",
-            "drift",
-            "regenerate"
-        ]
-
         if self.webhook_info.get("event_type") != "issue_comment":
             self.logger.debug('event_type is not an issue_comment - return default check')
             return {
@@ -638,20 +679,20 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         comment_params = [comment.strip() for comment in comment.split(" ")]
 
-        if comment_params[0] not in actions:
-            self.logger.warn(f"comment {comment_params[0]} must be {actions}")
+        if comment_params[0] not in self.valid_actions:
+            self.logger.warn(f"comment {comment_params[0]} must be {self.valid_actions}")
             return {
                 "status": False
             }
 
 
-        for action in actions:
+        for action in self.valid_actions:
 
             if action != comment_params[0]:
                 self.logger.debug(f'evaluating action: "{action}" != comment action: "{comment_params[0]}"')
                 continue
 
-            if comment_params[0] in ["plan", "validate", "regenerate", "drift"]:
+            if comment_params[0] in ["plan", "validate", "drift"]:
                 db_key = "check_str"
                 action_chk = "check"
             else:
@@ -687,8 +728,23 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                 }
 
             if action in ["check", "plan" ] and comment_params[1] == "destroy":
-                comment_check = comment_params[2]
+                try:
+                    comment_check = comment_params[2]
+                except:
+                    comment_check = None
                 self.plan_destroy = True
+            elif action == "report" and comment_params[1] == "all":
+                try:
+                    comment_check = comment_params[2]
+                except:
+                    comment_check = None
+                self.report_folders = 'all'
+            elif action == "report" and comment_params[1] != "all":
+                try:
+                    comment_check = comment_params[2]
+                except:
+                    comment_check = None
+                self.report_folders = comment_params[1]
             else:
                 comment_check = comment_params[1]
 
@@ -703,6 +759,12 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             if self.plan_destroy or action_chk == "check":
                 return {
                     "action": action_chk,
+                    "status": True
+                }
+
+            elif self.report_folders:
+                return {
+                    "action": "report",
                     "status": True
                 }
 
@@ -937,15 +999,13 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                     "failed_message": failed_message
                 }
             else:
-                msg = 'apply/check/destroy str not found in event_type "issue_comment"'
+                msg = f'{self.valid_actions} str not found in event_type "issue_comment"'
 
             self.results["status"] = "failed"
             self.results["initialized"] = None
             self.results["msg"] = msg
             self.add_log(self.results["msg"])
-
             self.notify()
-
             return False
 
         action = action_info.get("action")
@@ -957,36 +1017,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.add_log(self.results["msg"])
             return False
 
-        failed_message = None
-        iac_ci_folder = None
-
-        try:
-            iac_folder_info = self._get_iac_ci_folder()
-            if not iac_folder_info.get("status"):
-                failed_message = iac_folder_info.get("failed_message")
-            else:
-                iac_ci_folder = iac_folder_info["iac_ci_folder"]
-                self.logger.debug("#"*32)
-                self.logger.debug(f"# iac_ci_folder used is: {iac_ci_folder}")
-                self.logger.debug("#"*32)
-        except Exception:
-            failed_message = traceback.format_exc()
-
-        if failed_message:
-            self.logger.error(failed_message)
-            self.results["status"] = None
-            self.results["initialized"] = None
-            self.results["msg"] = failed_message
-            self.add_log(self.results["msg"])
-            return False
-
-        # There is an action
-        self.results[action] = True
-        self.webhook_info[action] = True
-        self.run_info[action] = True
-        self.results["iac_ci_folder"] = iac_ci_folder
-        self.run_info["iac_ci_folder"] = iac_ci_folder
-
         if self.webhook_info.get("status") is False:
             msg = self.webhook_info["msg"]
             self.results["status"] = "failed"
@@ -994,6 +1024,52 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.results["msg"] = msg
             self.add_log(self.results["msg"])
             return False
+
+        if self.report_folders:
+            iac_ci_folders = self.clone_and_get_yaml()
+            if self.report_folders == 'all':
+                self.results["report_folders"] = iac_ci_folders
+            elif self.report_folders in iac_ci_folders:
+                self.results["report_folders"] = [self.report_folders]
+            else:
+                failed_message = f"report_folders {self.report_folders} not found in iac_ci_folders {iac_ci_folders}"
+                self.logger.error(failed_message)
+                self.results["status"] = None
+                self.results["initialized"] = None
+                self.results["msg"] = failed_message
+                self.add_log(self.results["msg"])
+                return False
+        else:
+            failed_message = None
+            iac_ci_folder = None
+
+            try:
+                iac_folder_info = self._get_iac_ci_folder()
+                if not iac_folder_info.get("status"):
+                    failed_message = iac_folder_info.get("failed_message")
+                else:
+                    iac_ci_folder = iac_folder_info["iac_ci_folder"]
+                    self.logger.debug("#"*32)
+                    self.logger.debug(f"# iac_ci_folder used is: {iac_ci_folder}")
+                    self.logger.debug("#"*32)
+            except Exception:
+                failed_message = traceback.format_exc()
+
+            if failed_message:
+                self.logger.error(failed_message)
+                self.results["status"] = None
+                self.results["initialized"] = None
+                self.results["msg"] = failed_message
+                self.add_log(self.results["msg"])
+                return False
+
+            self.results["iac_ci_folder"] = iac_ci_folder
+            self.run_info["iac_ci_folder"] = iac_ci_folder
+
+        # There is an action
+        self.results[action] = True
+        self.webhook_info[action] = True
+        self.run_info[action] = True
 
         self.results["continue"] = True
         self.results["commit_hash"] = self.webhook_info["commit_hash"]
@@ -1023,16 +1099,43 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         # Save run info
         self.finalize_order()
-        self._save_run_info()
+        _save_run_info = self._save_run_info()
+
+        if _save_run_info.get("status") is False:
+            self.results["continue"] = False
+            self.results["update"] = True
+            self.results["msg"] = _save_run_info["failed_message"]
+            self.results["failed_message"] = _save_run_info["failed_message"]
+            return False
 
         self.results["status"] = "successful"
         self.results["msg"] = "webhook processed"
         self.results["initialized"] = True
         self.results["update"] = True
-        self.results["publish_vars"] = {
-            "trigger_id": self.trigger_id,
-            "iac_ci_id": self.iac_ci_id
-        }
+
+        if not _save_run_info.get("parallel_folder_builds"):
+            self.results["publish_vars"] = {
+                "trigger_id": self.trigger_id,
+                "iac_ci_id": self.iac_ci_id
+            }
+        else:
+            keys_to_delete = [
+                "build_status",
+                "step_func",
+                "log",
+                "msg",
+                "apply",
+                "check",
+                "destroy"
+            ]
+
+            self.results["report"] = True
+
+            for _key in keys_to_delete:
+                if _key in self.results:
+                    del self.results[_key]
+
+            self.results["parallel_folder_builds"] = _save_run_info["parallel_folder_builds"]
 
         self.insert_to_return()
 

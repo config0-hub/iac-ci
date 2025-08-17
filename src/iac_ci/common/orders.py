@@ -1414,7 +1414,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         try:
             setup_info = self._setup()
-
         except Exception:
             setup_info = {"status": False}
             failed_message = traceback.format_exc()

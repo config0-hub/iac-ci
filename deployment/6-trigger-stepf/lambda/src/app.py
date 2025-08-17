@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-'''
+# -*- coding: utf-8 -*-
+"""
 Copyright (C) 2025 Gary Leong gary@config0.com
 
 This program is free software: you can redistribute it and/or modify
@@ -14,8 +15,8 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
-'''
-
+"""
+import base64
 import os
 import json
 import boto3
@@ -25,239 +26,265 @@ import hmac
 import hashlib
 import logging
 from time import time
-from time import sleep
-from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-CI_APP_NAME = os.environ.get('CI_APP_NAME', 'iac_ci')
+CI_APP_NAME = os.environ.get("CI_APP_NAME", "iac_ci")
 
-# Basic events that are supported
-BASIC_EVENTS = [
-    "push",
-    "apply",
-    "pull_request",
-    "issue_comment"
-]
 
-# Valid actions for issue comments
-VALID_ACTIONS = [ "plan",
-                  "check",
-                  "destroy",
-                  "apply",
-                  "validate",
-                  "drift",
-                  "regenerate" ]
+def _load_list_from_b64_env(var_name, default_list):
+    val = os.environ.get(var_name)
+    if not val:
+        return list(default_list)
+    try:
+        decoded = base64.b64decode(val).decode("utf-8").strip()
+        # Try JSON first (preferred: '["push","apply"]')
+        try:
+            parsed = json.loads(decoded)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+        except Exception:
+            pass
+        # Fallback: comma/space separated string
+        if "," in decoded:
+            return [x.strip() for x in decoded.split(",") if x.strip()]
+        return [x.strip() for x in decoded.split() if x.strip()]
+    except Exception as e:
+        logger.warning("Failed to parse %s: %s. Falling back to default.", var_name, e)
+        return list(default_list)
+
+
+BASIC_EVENTS = _load_list_from_b64_env(
+    "BASIC_EVENTS_B64",
+    ["push", "apply", "pull_request", "issue_comment"],
+)
+
+VALID_ACTIONS = _load_list_from_b64_env(
+    "VALID_ACTIONS_B64",  # fixed env var name
+    ["plan", "check", "destroy", "apply", "validate", "report"],
+)
+
 
 def _write_execution_arn_to_db(search_str, execution_arn):
-    dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ.get('DYNAMODB_TABLE_RUNS','iac-ci-runs')
+    dynamodb = boto3.resource("dynamodb")
+    table_name = os.environ.get("DYNAMODB_TABLE_RUNS", "iac-ci-runs")
     table = dynamodb.Table(table_name)
-
+    now = int(time())
     item = {
         "_id": search_str,
         "execution_arn": execution_arn,
-        "checkin": int(time()),
-        "expire_at": int(time()) + 300
+        "checkin": now,
+        "expire_at": now + 300,
     }
-
-    for retry in range(10):
-        table.put_item(Item=item)
-        return True
-        
+    # Simple write with minimal retries
+    for _ in range(3):
+        try:
+            table.put_item(Item=item)
+            return True
+        except Exception as e:
+            logger.warning("Retrying put_item due to error: %s", e)
     return False
 
-def get_webhook_secret(trigger_id):
-    dynamodb = boto3.resource('dynamodb')
-    table_name = os.environ.get('DYNAMODB_TABLE_SETTINGS','iac-ci-settings')
-    table = dynamodb.Table(table_name)
 
-    response = table.get_item(Key={'_id': trigger_id})
-    
-    if 'Item' in response:
-        return response['Item']['secret']
-        
-    logger.error(f"Secret not found in DynamoDB SETTINGS table for _id: {trigger_id}")
+def get_webhook_secret(trigger_id):
+    dynamodb = boto3.resource("dynamodb")
+    table_name = os.environ.get("DYNAMODB_TABLE_SETTINGS", "iac-ci-settings")
+    table = dynamodb.Table(table_name)
+    try:
+        response = table.get_item(Key={"_id": trigger_id})
+    except Exception as e:
+        logger.error("DynamoDB get_item failed: %s", e)
+        return None
+    item = response.get("Item")
+    if item and "secret" in item:
+        return item["secret"]
+    logger.error("Secret not found in SETTINGS table for _id: %s", trigger_id)
     return None
 
+
+def _get_header_case_insensitive(headers, key):
+    if not headers:
+        return None
+    if key in headers:
+        return headers[key]
+    # normalize
+    lower = {str(k).lower(): v for k, v in headers.items()}
+    return lower.get(key.lower())
+
+
 def validate_github_webhook(event):
-    trigger_id = event["path"].split("/")[-1]
-    logger.info(f"Extracted trigger_id from URL: {trigger_id}")
-    
-    headers = event.get('headers', {})
-    body = event.get('body', '')
-    
-    github_signature = headers.get('x-hub-signature-256') or headers.get('X-Hub-Signature-256')
-    
-    if not github_signature:
+    path = event.get("path") or ""
+    trigger_id = path.split("/")[-1] if path else None
+    if not trigger_id:
+        logger.error("No trigger_id found in request path")
+        return False
+
+    logger.info("Extracted trigger_id from URL: %s", trigger_id)
+
+    headers = event.get("headers") or {}
+    body = event.get("body", "")
+
+    # API Gateway can base64-encode bodies
+    if event.get("isBase64Encoded"):
+        try:
+            body = base64.b64decode(body)
+        except Exception as e:
+            logger.error("Failed to base64-decode body: %s", e)
+            return False
+
+    sig_header = (
+        _get_header_case_insensitive(headers, "x-hub-signature-256")
+        or _get_header_case_insensitive(headers, "X-Hub-Signature-256")
+    )
+    if not sig_header:
         logger.error("Missing GitHub signature header")
         return False
-    
-    if github_signature.startswith('sha256='):
+
+    github_signature = sig_header
+    if github_signature.startswith("sha256="):
         github_signature = github_signature[7:]
-    
+
     secret = get_webhook_secret(trigger_id)
     if not secret:
-        logger.error(f"Failed to retrieve webhook secret for trigger_id: {trigger_id}")
+        logger.error("Failed to retrieve webhook secret for trigger_id: %s", trigger_id)
         return False
-    
+
     return validate_signature(body, secret, github_signature)
+
 
 def validate_signature(payload, secret, signature):
     if isinstance(payload, str):
-        payload = payload.encode('utf-8')
-    
+        payload = payload.encode("utf-8")
     if isinstance(secret, str):
-        secret = secret.encode('utf-8')
-    
-    expected_signature = hmac.new(
-        secret,
-        payload,
-        hashlib.sha256
-    ).hexdigest()
-    
-    return hmac.compare_digest(expected_signature, signature)
+        secret = secret.encode("utf-8")
+    expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
 
 def generate_random_string(length):
     characters = string.ascii_lowercase
-    return ''.join(random.choice(characters) for _ in range(length))
+    return "".join(random.choice(characters) for _ in range(length))
+
+
+def _parse_json_body_maybe(body):
+    if isinstance(body, (bytes, bytearray)):
+        try:
+            body = body.decode("utf-8")
+        except Exception:
+            pass
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except Exception:
+            return {}
+    return body if isinstance(body, dict) else {}
+
 
 def check_event(headers, body):
     """
-    Check if the event type is valid. If it is a ping, simply return with
-    a message indicating nothing was done. If the event type is an issue
-    comment, make sure the action is "created". If the event is a basic
-    event, return True. Otherwise, return a message indicating the type of
-    event must be one of the basic events.
-
-    Args:
-        headers (dict): The webhook request headers
-        body (str or dict): The webhook request body
-
-    Returns:
-        tuple: (status, message) - status is True if event is valid, False otherwise
+    Validates event type and comment commands for issue_comment.
+    Returns (status: bool, message: str).
     """
-    user_agent = str(headers.get('User-Agent', '')).lower()
+    headers = headers or {}
+    user_agent = str(_get_header_case_insensitive(headers, "User-Agent") or "").lower()
 
     if "bitbucket" in user_agent:
-        event_type = str(headers.get('X-Event-Key', ''))
+        event_type = str(_get_header_case_insensitive(headers, "X-Event-Key") or "")
     else:
-        event_type = headers.get('X-GitHub-Event', '')
+        event_type = str(_get_header_case_insensitive(headers, "X-GitHub-Event") or "")
 
     if event_type == "ping":
         return False, "event is ping - nothing done"
 
-    # Handle issue_comment action check
     if event_type == "issue_comment":
-        # Parse the event body if it's a string
-        payload = json.loads(body) if isinstance(body, str) else body
-        
-        # Check if the action is "created"
+        payload = _parse_json_body_maybe(body)
         if payload.get("action") != "created":
             return False, 'issue_comment needs to have action == "created"'
-            
-        # Check for valid commands in the comment
-        if 'comment' in payload and 'body' in payload['comment']:
-            comment = str(payload['comment']['body'].strip().split("\n")[0]).strip()
-            comment_params = [param.strip() for param in comment.split(" ")]
-            
-            # First word in comment should be a valid action
-            if comment_params[0] not in VALID_ACTIONS:
-                return False, f'Command "{comment_params[0]}" not recognized. Must be one of: {VALID_ACTIONS}'
+        comment = str(payload.get("comment", {}).get("body", "")).strip().split("\n")[0].strip()
+        if comment:
+            first = comment.split(" ", 1)[0].strip()
+            logger.info(f'evaluating first command string "{first}"')
+            if first not in VALID_ACTIONS:
+                return False, f'Command "{first}" not recognized. Must be one of: {VALID_ACTIONS}'
+            else:
+                logger.info(f'Command "{first}" recognized')
 
     if event_type in BASIC_EVENTS:
-        return True, "Event type is valid"
+        return True, f'Event type "{event_type}" is valid'
 
     return False, f'event = "{event_type}" must be one of {BASIC_EVENTS}'
 
+
 def handler(event, context):
     try:
-        # Validate GitHub webhook
         if not validate_github_webhook(event):
             logger.error("GitHub webhook validation failed")
             return {
-                'statusCode': 401,
-                'body': json.dumps({
-                    'error': 'Webhook validation failed'
-                })
+                "statusCode": 401,
+                "body": json.dumps({"error": "Webhook validation failed"}),
             }
-        
+
         logger.info("GitHub webhook validated successfully")
-        
-        # Check the event type
-        headers = event.get('headers', {})
-        body = event.get('body', '')
-        
-        # Perform event type check
-        event_valid, event_message = check_event(headers, body)
-        
-        if not event_valid:
-            logger.info(f"Event check result: {event_message}")
-            # If it's a ping, return a 200 OK but with a message
-            if "ping" in event_message:
+
+        headers = event.get("headers") or {}
+        body = event.get("body", "")
+
+        if event.get("isBase64Encoded"):
+            try:
+                body = base64.b64decode(body)
+            except Exception as e:
+                logger.error("Failed to base64-decode body in handler: %s", e)
                 return {
-                    'statusCode': 200,
-                    'body': json.dumps({
-                        'message': event_message
-                    })
+                    "statusCode": 400,
+                    "body": json.dumps({"error": "Invalid base64 body"}),
                 }
-            # For other invalid events, return a 400 Bad Request
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': event_message
-                })
-            }
-        
-        logger.info(f"Event check passed: {event_message}")
-        
-        # Generate a random string for tracking
+
+        ok, msg = check_event(headers, body)
+        if not ok:
+            logger.info("Event check result: %s", msg)
+            if "ping" in msg:
+                return {"statusCode": 200, "body": json.dumps({"message": msg})}
+            return {"statusCode": 400, "body": json.dumps({"error": msg})}
+
+        logger.info("Event check passed: %s", msg)
+
         search_str = generate_random_string(20)
 
-        # Add necessary information to the event
-        event[CI_APP_NAME] = {
-            "body": {
-                "step_func": True,
-                "search_str": search_str
-            }
-        }
+        event[CI_APP_NAME] = {"body": {"step_func": True, "search_str": search_str}}
 
-        # Get state machine ARN from environment
-        state_machine_arn = os.environ['STATE_MACHINE_ARN']
+        state_machine_arn = os.environ["STATE_MACHINE_ARN"]
 
-        # Start the Step Function execution
-        stepfunctions = boto3.client('stepfunctions')
+        stepfunctions = boto3.client("stepfunctions")
         response = stepfunctions.start_execution(
-            stateMachineArn=state_machine_arn,
-            input=json.dumps(event),
+            stateMachineArn=state_machine_arn, input=json.dumps(event)
         )
-        
-        execution_arn = response['executionArn']
-        request_id = event['requestContext']['requestId']
 
-        # Store the execution ARN in DynamoDB
+        execution_arn = response["executionArn"]
+        request_context = event.get("requestContext") or {}
+        request_id = request_context.get("requestId") or generate_random_string(12)
+
         _write_execution_arn_to_db(search_str, execution_arn)
 
-        # Log information about the execution
+        logger.info(
+            'event forwarded to state_machine: "%s" from api_gateway: "%s"',
+            state_machine_arn,
+            request_id,
+        )
         print("-" * 32)
-        print(f'event forwarded to state_machine: "{state_machine_arn}" from api_gateway: "{request_id}"')
-        print(f"#{CI_APP_NAME}:::api_to_stepf {search_str} {execution_arn}")
+        print(f'#{CI_APP_NAME}:::api_to_stepf {search_str} {execution_arn}')
         print("-" * 32)
 
         return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'message': 'Step Function triggered successfully',
-                'executionArn': execution_arn,
-                'request_id': request_id
-            })
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "message": "Step Function triggered successfully",
+                    "executionArn": execution_arn,
+                    "request_id": request_id,
+                }
+            ),
         }
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': 'Internal server error'
-            })
-        }
+        logger.error("Unexpected error: %s", e, exc_info=True)
+        return {"statusCode": 500, "body": json.dumps({"error": "Internal server error"})}

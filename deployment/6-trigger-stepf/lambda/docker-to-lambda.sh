@@ -32,8 +32,15 @@ echo "S3_BUCKET => ${S3_BUCKET}"
 echo "S3_KEY => ${S3_KEY}"
 echo "DOCKER_TEMP_IMAGE => ${DOCKER_TEMP_IMAGE}"
 echo "######################################################"
-
-rm -rf src.tar.gz && cd src && tar cvfz ../src.tar.gz . && cd -
+ 
+CWD=`pwd`
+rm -rf src.tar.gz
+rm -rf /tmp/trigger_src
+mkdir /tmp/trigger_src
+tar xvfz base.src.tar.gz -C /tmp/trigger_src
+cp -rp src/app.py /tmp/trigger_src
+cd /tmp/trigger_src && tar cvfz $CWD/src.tar.gz .
+cd $CWD
 
 docker build --build-arg pkg_name=$LAMBDA_PKG_NAME \
              --build-arg s3_bucket=$S3_BUCKET \
