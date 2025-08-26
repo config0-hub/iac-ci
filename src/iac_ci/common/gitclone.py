@@ -37,7 +37,6 @@ class CloneCheckOutCode:
         self.ssh_url = ssh_url
         self.commit_hash = commit_hash
 
-        # testtest456
         self.logger.info(self.ssh_url)
         self.logger.info(self.commit_hash)
 

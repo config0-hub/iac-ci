@@ -86,11 +86,11 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
             self.logger.debug(f"No build_env_vars.env.enc file found in '{self.archive_dir}'")
             return {}
 
-        # testtest456
-        self.logger.debug(f"b3"*32)
-        self.logger.debug(f"build_env_vars.env.enc file found in '{self.archive_dir}'")
-        self.logger.debug(f"run_id '{self.run_id}'")
-        self.logger.debug(f"b3"*32)
+        if os.environ.get('DEBUG_IAC_CI'):
+            self.logger.debug(f"#"*32)
+            self.logger.debug(f"build_env_vars.env.enc file found in '{self.archive_dir}'")
+            self.logger.debug(f"run_id '{self.run_id}'")
+            self.logger.debug(f"#"*32)
 
         build_file_path = match_files[0]
 
@@ -108,7 +108,6 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         except (IOError, UnicodeDecodeError) as e:
             self.logger.debug(f"Error processing build environment variables file: {e}")
 
-        # testtest456
         if self.report:
             env_vars["RUN_ID"] = self.run_id
             env_vars["STATEFUL_ID"] = self.run_id
@@ -135,10 +134,10 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         Raises:
             Exception: if any of the commands fail
         """
-        # testtest456
-        self.logger.debug("s0"*32)
-        self.logger.debug(f'archive_directory="{self.archive_dir}"')
-        self.logger.debug("s0"*32)
+        self.logger.debug(f"#" * 32)
+        self.logger.debug(f'archive_dir="{self.archive_dir}"')
+        self.logger.debug(f'clone_dir="{self.clone_dir}"')
+        self.logger.debug(f"#" * 32)
         os.chdir(self.archive_dir)
 
         shutil.make_archive(
@@ -181,10 +180,10 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         except:
             self.logger.warn("could not update phases in run_info")
 
-        # testtest456
-        self.logger.debug("c0"*32)
-        self.logger.json(clean_and_convert_data(self.run_info))
-        self.logger.debug("c0"*32)
+        if os.environ.get("DEBUG_IAC_CI"):
+            self.logger.debug("#"*32)
+            self.logger.json(clean_and_convert_data(self.run_info))
+            self.logger.debug("#"*32)
 
         self.db.table_runs.insert(self.run_info)
         msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"

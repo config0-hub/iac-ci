@@ -73,14 +73,6 @@ class TriggerLambdabuild(PlatformReporter):
         if self.infracost_api_key:
             cinputargs["infracost_api_key"] = self.infracost_api_key
 
-        # testtest456
-        self.logger.debug("#" * 32)
-        self.logger.debug("# cinputargs")
-        self.logger.json(cinputargs)
-        self.logger.debug("#" * 32)
-        self.logger.json(self.build_env_vars)
-        self.logger.debug("#" * 32)
-
         if os.environ.get("DEBUG_IAC_CI"):
             self.logger.debug("#" * 32)
             self.logger.debug("# cinputargs")

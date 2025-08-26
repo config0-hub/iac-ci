@@ -66,29 +66,43 @@ def format_terraform_validate(validate_output):
 
 def format_terraform_plan(plan_output):
     """
-    Format Terraform plan output for insertion into a GitHub collapsible details section.
+    Format Terraform plan output with improved readability and visual cues.
     
     Args:
         plan_output (str): Raw terraform plan output as a string
     
     Returns:
-        str: Formatted content ready for insertion into <details> section
+        str: Formatted content with enhanced visual indicators
     """
-    # Clean up any remaining ANSI escape codes (just in case)
+    # Clean up any ANSI escape codes
     clean_output = strip_ansi_codes(plan_output)
     
-    # Format the output for details section
+    # Format the output with syntax highlighting and visual indicators
     formatted_output = "\n```diff\n"
-    formatted_output += clean_output
-    formatted_output += "\n```\n"
+    
+    # Process line by line to add visual enhancements
+    lines = clean_output.split('\n')
+    for line in lines:
+        # Highlight resource changes
+        if line.strip().startswith("+ resource"):
+            formatted_output += "+ 🟢 " + line + "\n"
+        elif line.strip().startswith("- resource"):
+            formatted_output += "- 🔴 " + line + "\n"
+        elif line.strip().startswith("~ resource") or line.strip().startswith("# resource"):
+            formatted_output += "! 🟠 " + line + "\n"
+        # Regular lines
+        else:
+            formatted_output += line + "\n"
+            
+    formatted_output += "```\n"
     
     # Extract summary information
     summary = extract_plan_summary(clean_output)
     if summary:
-        formatted_output += "\n**📊 Summary:**\n"
-        formatted_output += f"- ✅ **{summary['add']} to add**\n"
-        formatted_output += f"- 🔄 **{summary['change']} to change**\n"
-        formatted_output += f"- ❌ **{summary['destroy']} to destroy**"
+        formatted_output += "\n**📊 Plan Summary:**\n"
+        formatted_output += f"- 🟢 **{summary['add']} to add**\n"
+        formatted_output += f"- 🟠 **{summary['change']} to change**\n"
+        formatted_output += f"- 🔴 **{summary['destroy']} to destroy**\n"
     
     return formatted_output
 
@@ -175,8 +189,12 @@ def extract_plan_summary(plan_output):
     Returns:
         dict: Dictionary with 'add', 'change', 'destroy' counts or None if not found
     """
+    if not plan_output:
+        return None
+        
+    clean_output = strip_ansi_codes(plan_output)
     pattern = r"Plan:\s+(\d+)\s+to\s+add,\s+(\d+)\s+to\s+change,\s+(\d+)\s+to\s+destroy"
-    match = re.search(pattern, plan_output)
+    match = re.search(pattern, clean_output)
     
     if match:
         return {
@@ -184,6 +202,15 @@ def extract_plan_summary(plan_output):
             'change': match.group(2),
             'destroy': match.group(3)
         }
+    
+    # Check for "No changes" pattern
+    if "No changes." in clean_output or "No changes to infrastructure" in clean_output:
+        return {
+            'add': '0',
+            'change': '0',
+            'destroy': '0'
+        }
+        
     return None
 
 def extract_infracost_monthly(infracost_data):
@@ -238,11 +265,6 @@ class GitPr(PlatformReporter):
         """
         self.classname = "TriggerLambda"
         self.logger = IaCLogger(self.classname)
-
-        # testtest456
-        self.logger.debug("." * 32)
-        self.logger.json(kwargs)
-        self.logger.debug("." * 32)
 
         PlatformReporter.__init__(self, **kwargs)
         self.phase = "update-pr"
@@ -343,30 +365,35 @@ class GitPr(PlatformReporter):
         Retrieves an artifact from an S3 bucket, given a suffix key.
 
         :param suffix_key: a string indicating the suffix key
+        :param ref_id: Optional reference ID to use instead of stateful_id
         :return: the content of the file as a string
         """
-
         if not ref_id:
             ref_id = self.stateful_id
 
-        s3_key = os.path.join(ref_id,
-                              "cur",
-                              suffix_key)
+        s3_key = f"{ref_id}/cur/{suffix_key}"
 
         return self._fetch_s3_artifact(s3_key)
 
     def _fetch_s3_artifact(self, s3_key):
-
+        """
+        Fetch a file from S3 with improved error handling and logging.
+        
+        :param s3_key: S3 key of the file to fetch
+        :return: File content as string or False if retrieval failed
+        """
+        self.logger.debug(f'Attempting to retrieve file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
+        
         file_info = self.s3_file.exists_and_get(format="list",
-                                                s3_bucket=self.tmp_bucket,
-                                                s3_key=s3_key,
-                                                stream=True)
+                                              s3_bucket=self.tmp_bucket,
+                                              s3_key=s3_key,
+                                              stream=True)
 
         if file_info["status"] is False:
-            self.logger.debug(f'Failed to retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
+            self.logger.debug(f'Failed to retrieve file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
             return False
 
-        self.logger.debug(f'retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
+        self.logger.debug(f'Successfully retrieved file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
 
         indented_lines = ["    " + line for line in file_info["content"]]
 
@@ -382,7 +409,7 @@ class GitPr(PlatformReporter):
         if not ref_id:
             ref_id = self.stateful_id
 
-        return self._get_s3_artifact(f"tfsec.{ref_id}.out",ref_id=ref_id)
+        return self._get_s3_artifact(f"tfsec.{ref_id}.out", ref_id=ref_id)
 
     def _get_infracost(self, ref_id=None, filetype=None):
         """
@@ -394,9 +421,9 @@ class GitPr(PlatformReporter):
             ref_id = self.stateful_id
 
         if filetype == "json":
-            return self._get_s3_artifact(f"infracost.{ref_id}.json",ref_id=ref_id)
+            return self._get_s3_artifact(f"infracost.{ref_id}.json", ref_id=ref_id)
 
-        return self._get_s3_artifact(f"infracost.{ref_id}.out",ref_id=ref_id)
+        return self._get_s3_artifact(f"infracost.{ref_id}.out", ref_id=ref_id)
 
     def _get_tfplan(self, ref_id=None):
         """
@@ -407,7 +434,7 @@ class GitPr(PlatformReporter):
         if not ref_id:
             ref_id = self.stateful_id
 
-        return self._get_s3_artifact(f"terraform.{ref_id}.tfplan.out",ref_id=ref_id)
+        return self._get_s3_artifact(f"terraform.{ref_id}.tfplan.out", ref_id=ref_id)
 
     def _get_tfinit(self, ref_id=None):
         """
@@ -418,7 +445,7 @@ class GitPr(PlatformReporter):
         if not ref_id:
             ref_id = self.stateful_id
 
-        return self._get_s3_artifact(f"terraform.{ref_id}.init",ref_id=ref_id)
+        return self._get_s3_artifact(f"terraform.{ref_id}.init", ref_id=ref_id)
 
     def _get_tffmt(self, ref_id=None):
         """
@@ -429,7 +456,7 @@ class GitPr(PlatformReporter):
         if not ref_id:
             ref_id = self.stateful_id
 
-        return self._get_s3_artifact(f"terraform.{ref_id}.fmt",ref_id=ref_id)
+        return self._get_s3_artifact(f"terraform.{ref_id}.fmt", ref_id=ref_id)
 
     def _get_tfvalidate(self, ref_id=None):
         """
@@ -440,7 +467,7 @@ class GitPr(PlatformReporter):
         if not ref_id:
             ref_id = self.stateful_id
 
-        return self._get_s3_artifact(f"terraform.{ref_id}.validate",ref_id=ref_id)
+        return self._get_s3_artifact(f"terraform.{ref_id}.validate", ref_id=ref_id)
 
     def _set_order(self):
         """
@@ -793,18 +820,34 @@ class GitPr(PlatformReporter):
 
     def _get_parallel_run_summary(self, run_id):
         """
-        Get summary information for a single run.
+        Get summary information for a single run with improved error handling.
         
         :param run_id: ID of the run to summarize
         :return: Dictionary containing summary information for the run
         """
-        values = self.db.table_runs.search_key(key="_id", value=run_id)["Items"][0]
-
-        return {
-            "iac_ci_folder": values.get("iac_ci_folder", "N/A"),
-            "run_id": run_id,
-            "status": values.get("status", "unknown")
-        }
+        try:
+            results = self.db.table_runs.search_key(key="_id", value=run_id)
+            if not results.get("Items") or len(results["Items"]) == 0:
+                self.logger.debug(f"No data found for run_id: {run_id}")
+                return {
+                    "iac_ci_folder": "N/A",
+                    "run_id": run_id,
+                    "status": "unknown"
+                }
+                
+            values = results["Items"][0]
+            return {
+                "iac_ci_folder": values.get("iac_ci_folder", "N/A"),
+                "run_id": run_id,
+                "status": values.get("status", "unknown")
+            }
+        except Exception as e:
+            self.logger.debug(f"Error retrieving run data for {run_id}: {str(e)}")
+            return {
+                "iac_ci_folder": "Error",
+                "run_id": run_id,
+                "status": "error"
+            }
 
     def _get_parallel_runs_summary(self, run_ids):
         """
@@ -820,114 +863,144 @@ class GitPr(PlatformReporter):
 
         return results
 
-    def _get_s3_link_url(self, run_id, file_type):
+    def _get_s3_link_url(self, ref_id, file_type):
         """
-        Generate a clickable URL for S3 files.
+        Generate a clickable S3 URL for accessing artifacts.
         
-        Creates a web console URL for the S3 object that users can click.
+        Creates a properly formatted s3:// URL that can be used with AWS CLI.
         
-        :param run_id: The run ID associated with the file
+        :param ref_id: Reference ID (could be stateful_id or another ID) 
+                      used to locate the file
         :param file_type: The type of file (tfplan, tfsec, infracost)
-        :return: A URL string
+        :return: A properly formatted S3 URL string
         """
         if file_type == "tfplan":
-            s3_key = f"{run_id}/cur/terraform.{run_id}.tfplan.out"
+            s3_key = f"{ref_id}/cur/terraform.{ref_id}.tfplan.out"
         elif file_type == "tfsec":
-            s3_key = f"{run_id}/cur/tfsec.{run_id}.out"
+            s3_key = f"{ref_id}/cur/tfsec.{ref_id}.out"
         elif file_type == "infracost":
-            s3_key = f"{run_id}/cur/infracost.{run_id}.out"
+            s3_key = f"{ref_id}/cur/infracost.{ref_id}.out"
         else:
             return "#"
             
-        # Create an AWS console URL for the S3 object
-        region = os.environ.get('AWS_REGION', 'us-east-1')  # Get region from env or default
-        #console_url = f"https://s3.console.aws.amazon.com/s3/object/{self.tmp_bucket}?region={region}&prefix={s3_key}"
-        s3_key = f"s3://{self.tmp_bucket}/{s3_key}"
-
-        return s3_key
-
+        # Create a properly formatted S3 URL
+        s3_url = f"s3://{self.tmp_bucket}/{s3_key}"
+        
+        return s3_url
+    
     def _get_pr_md_parallel_runs(self, runs_summary):
         """
-        Generate a markdown table summarizing multiple runs.
-        
+        Generate a markdown table summarizing multiple runs with enhanced plan details
+        and a collapsible appendix with all S3 file locations.
+
         :param runs_summary: List of dictionaries containing summary information for each run
         :return: Dictionary with comment_body and md5sum
         """
         # Initialize the content with a header
         content = "## 🏗️ Terraform Multi-Folder Summary\n\n"
-        
-        # Initialize the table header
-        table = "| Folder | Terraform Plan | Security Scan | Cost Estimate |\n"
-        table += "|--------|---------------|--------------|---------------|\n"
-        
+
+        # Initialize the table header with original columns
+        table = "| Folder | Drift Check | Security | Cost |\n"
+        table += "|--------|------------|----------|------|\n"
+
+        # Initialize the collapsible appendix section for S3 file locations
+        appendix = "\n<details>\n<summary>📁 S3 File Locations (Click to expand)</summary>\n\n"
+
         # Process each run and add to the table
         for run in runs_summary:
             run_id = run["run_id"]
             folder = run.get("iac_ci_folder", "N/A")
+            folder_anchor = folder.replace("/", "-").replace(" ", "-").lower()
 
             # Get terraform plan data and analyze
             tf_plan_data = self._get_tfplan(ref_id=run_id)
-            no_changes = self._analyze_tfplan_for_summary(tf_plan_data)
+            plan_summary = extract_plan_summary(tf_plan_data) if tf_plan_data else None
 
             # Get tfsec data and analyze
             tfsec_data = self._get_tfsec(ref_id=run_id)
             tfsec_severity = self._analyze_tfsec_for_summary(tfsec_data)
 
             # Get infracost data
-            infracost_data = self._get_infracost(ref_id=run_id,filetype="json")
+            infracost_data = self._get_infracost(ref_id=run_id, filetype="json")
             monthly_cost = extract_infracost_monthly(infracost_data) if infracost_data else "N/A"
-            
+
             # Generate S3 links
             tf_plan_link = self._get_s3_link_url(run_id, "tfplan")
             tfsec_link = self._get_s3_link_url(run_id, "tfsec")
             infracost_link = self._get_s3_link_url(run_id, "infracost")
-            
-            # Format the terraform plan cell with icon
-            if no_changes:
-                tf_plan_cell = f"✅ [No Drift]({tf_plan_link})"
-            else:
-                tf_plan_cell = f"❌ [Drift Detected]({tf_plan_link})"
 
-            # Format the tfsec cell with icon based on severity
+            # Create anchor links to the appropriate sections in the appendix
+            tf_plan_anchor = f"#{folder_anchor}-plan"
+            tfsec_anchor = f"#{folder_anchor}-security"
+            infracost_anchor = f"#{folder_anchor}-cost"
+
+            # Format the terraform plan cell with drift indicators and anchor link
+            if plan_summary:
+                add_count = int(plan_summary.get('add', '0'))
+                change_count = int(plan_summary.get('change', '0'))
+                destroy_count = int(plan_summary.get('destroy', '0'))
+
+                if add_count == 0 and change_count == 0 and destroy_count == 0:
+                    tf_plan_cell = f"✅ No Drift [link]({tf_plan_anchor})"
+                else:
+                    # Show counts with color-coded indicators (red X for drift)
+                    changes = []
+                    if add_count > 0:
+                        changes.append(f"❌/🟣+{add_count}")
+                    if change_count > 0:
+                        changes.append(f"❌/🟠~{change_count}")
+                    if destroy_count > 0:
+                        changes.append(f"❌/🔴-{destroy_count}")
+
+                    tf_plan_cell = f"{' '.join(changes)} [link]({tf_plan_anchor})"
+            else:
+                tf_plan_cell = f"❓ Unknown [link]({tf_plan_anchor})"
+
+            # Format the tfsec cell with icon based on severity and anchor link
             if tfsec_severity == "success":
-                tfsec_cell = f"✅ [No issues]({tfsec_link})"
+                tfsec_cell = f"✅ [link]({tfsec_anchor})"
             elif tfsec_severity == "high":
-                tfsec_cell = f"❌ [Critical/High issues]({tfsec_link})"
+                tfsec_cell = f"❌ [link]({tfsec_anchor})"
             elif tfsec_severity == "medium":
-                tfsec_cell = f"⚠️ [Medium issues]({tfsec_link})"
+                tfsec_cell = f"⚠️ [link]({tfsec_anchor})"
             elif tfsec_severity == "low":
-                tfsec_cell = f"ℹ️ [Low issues]({tfsec_link})"
+                tfsec_cell = f"ℹ️ [link]({tfsec_anchor})"
             else:
-                tfsec_cell = f"❓ [N/A]({tfsec_link})"        # Question mark for unknown
+                tfsec_cell = f"❓ [link]({tfsec_anchor})"
 
-            # Format the infracost cell
-            infracost_cell = f"💰 [{monthly_cost}]({infracost_link})"
-            
+            # Format the infracost cell with anchor link
+            infracost_cell = f"{monthly_cost} [link]({infracost_anchor})"
+
             # Add row to the table
             table += f"| `{folder}` | {tf_plan_cell} | {tfsec_cell} | {infracost_cell} |\n"
-        
+
+            # Add this folder's S3 file locations to the appendix
+            appendix += f"### {folder} <a name=\"{folder_anchor}\"></a>\n"
+            appendix += f"- **Drift Check** <a name=\"{folder_anchor}-plan\"></a>: `{tf_plan_link}`\n"
+            appendix += f"- **Security** <a name=\"{folder_anchor}-security\"></a>: `{tfsec_link}`\n"
+            appendix += f"- **Cost** <a name=\"{folder_anchor}-cost\"></a>: `{infracost_link}`\n\n"
+
         # Add the table to the content
         content += table
-        
-        # Add additional information
-        #content += "\n### Legend:\n"
-        #content += "- ✅ - No changes or issues detected\n"
-        #content += "- ❌ - Changes or issues detected\n"
-        #content += "- ⚠️ - Medium severity issues\n"
-        #content += "- ℹ️ - Low severity issues\n"
-        #content += "- ❓ - Status unknown\n"
-        #content += "- 💰 - Estimated monthly cost\n\n"
-        #content += "Click on any cell to view the complete details in AWS console.\n"
-        
+
+        # Add legend for quick reference
+        content += "\n**Legend:** ❌ Drift Detected | 🟣 Add | 🟠 Change | 🔴 Delete | ✅ No Drift/Issues | ❌ Critical/High | ⚠️ Medium | ℹ️ Low\n"
+
+        # Close the appendix section
+        appendix += "</details>\n"
+
+        # Add the appendix to the content
+        content += appendix
+
         # Add CI details if available
         ci_link_content = self._ci_links()
         if ci_link_content:
-            content += ci_link_content
-            
+            content += "\n" + ci_link_content
+
         # Create the comment body
         comment_body = f'{content}\n\n#{self.search_tag}'
         md5sum_str = get_hash_from_string(comment_body)
-        
+
         return {
             "comment_body": comment_body,
             "md5sum": md5sum_str

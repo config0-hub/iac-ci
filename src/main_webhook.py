@@ -99,8 +99,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             "destroy"
         ]
 
-        # testtest456
-        #self.results["report"] = True
         self.plan_destroy = None
         self.report_folders = None
         self.github_repo = None
@@ -615,7 +613,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.add_log(msg)
             return { "status": True }
 
-        # testtest456
         # this is map report_folders inputs
         parallel_folder_builds = []
 
@@ -640,11 +637,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             _values["_id"] = p_run_id
             _values["run_id"] = p_run_id
             _values["iac_ci_folder"] = folder
-
-            # testtest456
-            print('y0'*32)
-            self.logger.json(_values)
-            print('y0'*32)
             self.db.table_runs.insert(_values)
 
         values["parallel_folder_builds"] = parallel_folder_builds

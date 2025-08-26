@@ -145,17 +145,10 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
     def _eval_report_inputargs(self,**kwargs):
 
-        # testtest456
-        self.logger.debug("j0" * 32)
-        self.logger.json(kwargs)
-        self.logger.debug("j0"*32)
-
         body = self._get_kwargs_body(**kwargs)
 
         if not kwargs.get("report") and not body.get("report"):
             return kwargs
-
-        self.logger.debug("j1" * 32)
 
         if "_id" in kwargs:
             inputargs = clean_and_convert_data(self.db.table_runs.search_key(key="_id", value=kwargs["_id"])["Items"][0])
@@ -196,13 +189,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         inputargs["status"] = "in_progress"
         inputargs["update"] = None
         inputargs["report"] = True
-
-        # testtest456
-        self.logger.debug("k0"*32)
-        self.logger.json(kwargs)
-        self.logger.debug("k1"*32)
-        self.logger.json(inputargs)
-        self.logger.debug("k2"*32)
 
         return inputargs
 
@@ -730,12 +716,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         self._set_s3_data_key()
 
-        # testtest456
-        #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0
-	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	provided run_id tgnrfq1756092177
-	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	pkgcode-to-s3
-	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0
-
         try:
             self.build_timeout = int(self.trigger_info.get("build_timeout", 600))
         except Exception:
@@ -747,28 +727,17 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             self._set_s3_data_key()
             return {"status": True}
 
-        # testtest456
-        self.logger.debug("m0" * 32)
-        self.logger.debug(f"provided run_id: {self.run_id}")
-        self.logger.debug(f"s3_data_key: {self.s3_data_key}")
-        self.logger.debug(f"phase: {self.phase}")
-        self.logger.debug("m0" * 32)
+        if os.environ.get("DEBUG_IAC_CI"):
+            self.logger.debug("#" * 32)
+            self.logger.debug(f"provided run_id: {self.run_id}")
+            self.logger.debug(f"s3_data_key: {self.s3_data_key}")
+            self.logger.debug(f"phase: {self.phase}")
+            self.logger.debug("#" * 32)
 
         # existing run
         self._load_run_info()
         self._set_add_class_vars()
 
-        # bypassing the conventional class init vars
-        # with update-pr and reporting
-        #if self.phase == "update-pr" and self.report:
-        #    return {
-        #        "status":True,
-        #        "parallel_folder_builds": self.run_info.get("parallel_folder_builds")
-        #    }
-        #if not self.phase == "update-pr" and not self.report:
-
-        # testtest456
-        self.logger.debug("d0" * 32)
         if self.phase not in [ "pkgcode-to-s3" ]:
             try:
                 self.build_env_vars = json.loads(base64.b64decode(self.run_info["build_env_vars_b64"]).decode('utf-8'))
@@ -777,10 +746,8 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
                 self.build_env_vars = {}
         else:
             self.build_env_vars = {}
-        self.logger.json(self.build_env_vars)
-        self.logger.debug("d0"*32)
 
-        if self.build_env_vars.get("DEBUG_IAC_CI"):
+        if os.environ.get("DEBUG_IAC_CI"):
             os.environ["DEBUG_IAC_CI"] = "True"
 
         if not self.iac_platform:
@@ -1632,20 +1599,16 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.s3_output_folder = id_generator2()
 
         if self.report:
-            # testtest456
-            self.logger.debug("n0" * 32)
             self.logger.debug("overwriting build_env_vars for report/parallel folders")
             self.build_env_vars["RUN_ID"] = self.run_id
             self.build_env_vars["STATEFUL_ID"] = self.run_id
             self.build_env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
+
         self.logger.json(self.build_env_vars)
         self.logger.debug("#" * 32)
-        # testtest456
-        self.logger.debug("n0" * 32)
 
         self.tf_runtime = self.iac_ci_info["tf_runtime"]
         self.aws_region = self.iac_ci_info.get("aws_default_region", "us-east-1")
-
 
         # TODO: may want to change this on a run level
         # ssm_name and infracost_api_key is typically set at the repo level
