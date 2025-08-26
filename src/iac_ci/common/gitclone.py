@@ -10,9 +10,10 @@ License: GNU General Public License v3.0
 
 import shutil
 import os
+import yaml
+from pathlib import Path
 import boto3
 import json
-import yaml
 
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.shellouts import system_exec
@@ -27,17 +28,18 @@ class CloneCheckOutCode:
     """
     Base class that contains functionality to clone and checkout code from a git repository.
     """
-    def __init__(self, **kwargs):
+    def __init__(self, ssh_url=None, commit_hash=None):
         self.logger = IaCLogger("CloneCheckOutCode")
         
         self.ssm_ssh_key = None
         self.git_depth = None
 
-        if kwargs.get("ssh_url"):
-            self.ssh_url = kwargs["ssh_url"]
+        self.ssh_url = ssh_url
+        self.commit_hash = commit_hash
 
-        if kwargs.get("commit_hash"):
-            self.commit_hash = kwargs["commit_hash"]
+        # testtest456
+        self.logger.info(self.ssh_url)
+        self.logger.info(self.commit_hash)
 
         self.iac_ci_folder = None
         self.private_key_path = "/tmp/id_rsa"
@@ -88,7 +90,7 @@ class CloneCheckOutCode:
 
         os.chmod(self.private_key_path, 0o600)
 
-    def fetch_code(self):
+    def fetch_code(self,iac_ci_folder_must_exists=None):
         """
         Fetches the source code from github.
 
@@ -125,6 +127,9 @@ class CloneCheckOutCode:
 
         os.makedirs(self.clone_dir, exist_ok=True)
 
+        if not self.iac_ci_folder and iac_ci_folder_must_exists:
+            raise Exception("iac_ci_folder not set")
+
         if self.iac_ci_folder:
             src_dir = f'{temp_dir}/{self.iac_ci_folder}'
         else:
@@ -138,6 +143,61 @@ class CloneCheckOutCode:
                 self.logger.debug(f"Moved '{source_item}' to '{target_item}'.")
             except (shutil.Error, OSError, IOError) as e:
                 self.logger.debug(f"Error moving '{source_item}': {e}")
+
+    def find_and_process_config_files(self, basedir=None, config_path=".iac_ci/config.yaml"):
+        """
+        Searches for directories containing the specified config file, reads the YAML,
+        and extracts 'destroy' and 'apply' values.
+
+        Args:
+            basedir (str): Root directory to start the search from
+            config_path (str): Relative path to the config file to search for
+
+        Returns:
+            dict: Dictionary with directory paths as keys and subdictionaries of 'destroy' and 'apply' values
+        """
+
+        if not basedir:
+            basedir = self.clone_dir
+
+        results = {}
+
+        # Convert to absolute path and resolve any symlinks
+        root_path = Path(basedir).resolve()
+
+        # Walk through all directories
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            # Create the potential config file path
+            current_path = Path(dirpath)
+            config_file = current_path / config_path
+
+            # Check if the config file exists
+            if config_file.exists() and config_file.is_file():
+                try:
+                    # Read and parse the YAML file
+                    with open(config_file, 'r') as file:
+                        config_data = yaml.safe_load(file)
+
+                    # Extract destroy and apply values, defaulting to False if not present
+                    destroy_value = config_data.get('destroy', False)
+                    apply_value = config_data.get('apply', False)
+
+                    # Only consider True if explicitly set to True
+                    destroy_value = True if destroy_value is True else False
+                    apply_value = True if apply_value is True else False
+
+                    # Store the results
+                    # Use relative path from basedir for cleaner output
+                    rel_path = str(current_path.relative_to(root_path))
+                    results[rel_path] = {
+                        'destroy': destroy_value,
+                        'apply': apply_value
+                    }
+
+                except Exception as e:
+                    print(f"Error processing {config_file}: {e}")
+
+        return results
 
     def get_repo_file(self, rel_file_path, file_type=None):
         """

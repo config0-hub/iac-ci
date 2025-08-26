@@ -355,11 +355,15 @@ class GetFrmDb:
         Args:
             **kwargs: Must include 'app_name' for table names
         """
+
         self.classname = "GetFrmDb"
         self.logger = IaCLogger(self.classname)
         dynamodb_boto3 = Dynamodb_boto3()
 
-        app_name = kwargs["app_name"]
+        app_name = kwargs.get("app_name")
+
+        if not app_name:
+            app_name = os.environ.get("APP_NAME_IAC", "iac-ci")
 
         self.table_runs_name = f'{app_name}-runs'
         self.table_settings_name = f'{app_name}-settings'

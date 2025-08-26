@@ -64,11 +64,22 @@ def handler(event, context):
 
     results = main.run()
 
-    return {
+    stepf_results = {
         'statusCode': 200,
+        'report': None,
         'continue': results["continue"],
         'apply': results.get("apply"),
         'destroy': results.get("destroy"),
         'check': results.get("check"),
         'body': json.dumps(results)
     }
+
+    if results.get("report") and results.get("parallel_folder_builds"):
+        stepf_results['parallel_folder_builds'] = results["parallel_folder_builds"]
+        stepf_results['report'] = True
+
+    main.logger.debug("." * 32)
+    main.logger.json(stepf_results)
+    main.logger.debug("." * 32)
+
+    return stepf_results

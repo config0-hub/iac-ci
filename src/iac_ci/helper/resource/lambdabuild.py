@@ -225,10 +225,20 @@ class Lambdabuild(LambdaParams):
             cmds = self.tfcmds.get_tf_pre_create()
         elif self.method in ["validate", "drift"]:
             cmds = self.tfcmds.get_tf_chk_drift()
+        elif self.method in ["report"]:
+            cmds = self.tfcmds.get_tf_ci()
+            cmds.extend(tfsec_cmds)
+            cmds.extend(infracost_cmds)
+            cmds.extend(self.tfcmds.get_tf_chk_drift(cmds_alone=True))
         elif self.method == "destroy":
             cmds = self.tfcmds.get_tf_destroy()
         else:
             raise ValueError("method needs to be create/validate/ci/pre-create/check/apply/destroy")
+
+        if os.environ.get("DEBUG_IAC_CI"):
+            self.logger.debug("*"*32)
+            self.logger.json(cmds)
+            self.logger.debug("*"*32)
 
         return cmds
 

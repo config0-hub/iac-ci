@@ -18,6 +18,7 @@
 import os
 import boto3
 import re
+import json
 
 from iac_ci.common.utilities import get_hash_from_string
 from iac_ci.common.github_pr import GitHubRepo
@@ -97,10 +98,10 @@ def format_tfsec_output(tfsec_output):
     
     formatted = "\n🔒 **Security Scan Results**\n\n"
     
-    # Count issues by severity
-    high_count = clean_output.count("HIGH")
-    medium_count = clean_output.count("MEDIUM") 
-    low_count = clean_output.count("LOW")
+    # Count issues by severity - more robust counting
+    high_count = len(re.findall(r"(CRITICAL|HIGH)", clean_output, re.IGNORECASE))
+    medium_count = len(re.findall(r"MEDIUM", clean_output, re.IGNORECASE))
+    low_count = len(re.findall(r"LOW", clean_output, re.IGNORECASE))
     
     if high_count == 0 and medium_count == 0 and low_count == 0:
         if "No problems detected" in clean_output or len(clean_output.strip()) == 0:
@@ -110,11 +111,11 @@ def format_tfsec_output(tfsec_output):
     # Summary
     formatted += "**Summary:**\n"
     if high_count > 0:
-        formatted += f"- 🔴 **{high_count} HIGH** severity issues\n"
+        formatted += f"- 🔴 **{high_count} HIGH/CRITICAL** severity issues\n"
     if medium_count > 0:
-        formatted += f"- 🟡 **{medium_count} MEDIUM** severity issues\n"
+        formatted += f"- 🟠 **{medium_count} MEDIUM** severity issues\n"
     if low_count > 0:
-        formatted += f"- 🔵 **{low_count} LOW** severity issues\n"
+        formatted += f"- 🟡 **{low_count} LOW** severity issues\n"
     
     formatted += "\n```\n"
     formatted += clean_output
@@ -185,6 +186,46 @@ def extract_plan_summary(plan_output):
         }
     return None
 
+def extract_infracost_monthly(infracost_data):
+    """
+    Extract the monthly cost from infracost JSON data.
+    
+    :param infracost_data: JSON string from infracost output
+    :return: str: The monthly cost formatted as a string
+    """
+    if not infracost_data:
+        return "N/A"
+
+    # Parse the JSON data
+    try:
+        data = json.loads(infracost_data)
+    except Exception as e:
+        print(f"Failed to parse infracost JSON: {str(e)}")
+        return "N/A"
+
+    # Get the total monthly cost from the top level
+    try:
+        monthly_cost = data.get("totalMonthlyCost", "0")
+    except Exception as e:
+        print(f"Failed to extract totalMonthlyCost: {str(e)}")
+        return "N/A"
+
+    # Check if there's a difference in cost
+    diff_cost = data.get("diffTotalMonthlyCost", "0")
+
+    # Format the cost
+    if float(monthly_cost) > 0:
+        formatted_cost = f"${float(monthly_cost):.2f}"
+    else:
+        formatted_cost = "$0"
+
+    # Add diff if it exists and is not zero
+    if diff_cost and float(diff_cost) != 0:
+        diff_prefix = "+" if float(diff_cost) > 0 else ""
+        formatted_cost += f" ({diff_prefix}${float(diff_cost):.2f})"
+
+    return formatted_cost
+        
 class GitPr(PlatformReporter):
 
     def __init__(self, **kwargs):
@@ -198,6 +239,11 @@ class GitPr(PlatformReporter):
         self.classname = "TriggerLambda"
         self.logger = IaCLogger(self.classname)
 
+        # testtest456
+        self.logger.debug("." * 32)
+        self.logger.json(kwargs)
+        self.logger.debug("." * 32)
+
         PlatformReporter.__init__(self, **kwargs)
         self.phase = "update-pr"
 
@@ -208,14 +254,102 @@ class GitPr(PlatformReporter):
         if kwargs.get("failure_s3_key"):
             self.failure_s3_key = kwargs["failure_s3_key"]
 
-    def _get_s3_artifact(self, suffix_key):
+    def _analyze_tfplan_for_summary(self, plan_output):
+        """
+        Analyze terraform plan output to determine if there are changes.
+        Returns True if no changes (success), False if changes (drift).
+
+        :param plan_output: Raw terraform plan output
+        :return: True if no changes, False if changes
+        """
+        if not plan_output:
+            return False
+
+        clean_output = strip_ansi_codes(plan_output)
+
+        # Check for "No changes" statement - this is the success case
+        if "No changes" in clean_output:
+            return True
+
+        # Any of these patterns indicate changes
+        change_indicators = [
+            "Plan: ",
+            "to add",
+            "to change",
+            "to destroy",
+            "will be created",
+            "will be destroyed",
+            "will be updated",
+            "+ resource",
+            "- resource"
+        ]
+
+        for indicator in change_indicators:
+            if indicator in clean_output:
+                return False
+
+        # If we can't definitively detect changes, assume there are none
+        return True
+
+    def _analyze_tfsec_for_summary(self, tfsec_output):
+        """
+        Analyze tfsec output to determine security issue severity.
+        Returns "high" for critical/high, "medium", "low", or "success" if no issues.
+
+        :param tfsec_output: Raw tfsec output
+        :return: String indicating severity or success
+        """
+        if not tfsec_output:
+            return "success"
+
+        clean_output = strip_ansi_codes(tfsec_output)
+
+        # Look for the results section - more flexible regex pattern
+        results_match = re.search(r"(?:results|Results).*?(?:passed|Passed).*?(\d+).*?(?:critical|Critical).*?(\d+).*?(?:high|High).*?(\d+).*?(?:medium|Medium).*?(\d+).*?(?:low|Low).*?(\d+)", 
+                                clean_output, 
+                                re.MULTILINE | re.DOTALL | re.IGNORECASE)
+
+        if results_match:
+            critical = int(results_match.group(1))
+            high = int(results_match.group(2))
+            medium = int(results_match.group(3))
+            low = int(results_match.group(4))
+
+            # Group critical and high together
+            if critical > 0 or high > 0:
+                return "high"
+            elif medium > 0:
+                return "medium"
+            elif low > 0:
+                return "low"
+            else:
+                return "success"
+
+        # Alternative check for critical/high/medium/low issues
+        if re.search(r"(CRITICAL|HIGH)", clean_output, re.IGNORECASE):
+            return "high"
+        elif re.search(r"MEDIUM", clean_output, re.IGNORECASE):
+            return "medium"
+        elif re.search(r"LOW", clean_output, re.IGNORECASE):
+            return "low"
+        elif "No problems detected" in clean_output or not clean_output.strip():
+            return "success"
+
+        # Default to success if no issues detected
+        return "success"
+
+    def _get_s3_artifact(self, suffix_key, ref_id=None):
         """
         Retrieves an artifact from an S3 bucket, given a suffix key.
 
         :param suffix_key: a string indicating the suffix key
         :return: the content of the file as a string
         """
-        s3_key = os.path.join(self.stateful_id,
+
+        if not ref_id:
+            ref_id = self.stateful_id
+
+        s3_key = os.path.join(ref_id,
                               "cur",
                               suffix_key)
 
@@ -238,53 +372,75 @@ class GitPr(PlatformReporter):
 
         return ''.join(indented_lines)
 
-    def _get_tfsec(self):
+    def _get_tfsec(self, ref_id=None):
         """
         Retrieves a tfsec artifact from an S3 bucket.
 
         :return: the content of the artifact as a string
         """
-        return self._get_s3_artifact(f"tfsec.{self.stateful_id}.out")
 
-    def _get_infracost(self):
+        if not ref_id:
+            ref_id = self.stateful_id
+
+        return self._get_s3_artifact(f"tfsec.{ref_id}.out",ref_id=ref_id)
+
+    def _get_infracost(self, ref_id=None, filetype=None):
         """
         Retrieves an infracost artifact from an S3 bucket.
 
         :return: the content of the artifact as a string
         """
-        return self._get_s3_artifact(f"infracost.{self.stateful_id}.out")
+        if not ref_id:
+            ref_id = self.stateful_id
 
-    def _get_tfplan(self):
+        if filetype == "json":
+            return self._get_s3_artifact(f"infracost.{ref_id}.json",ref_id=ref_id)
+
+        return self._get_s3_artifact(f"infracost.{ref_id}.out",ref_id=ref_id)
+
+    def _get_tfplan(self, ref_id=None):
         """
         Retrieves a Terraform plan artifact from an S3 bucket.
 
         :return: the content of the Terraform plan artifact as a string
         """
-        return self._get_s3_artifact(f"terraform.{self.stateful_id}.tfplan.out")
+        if not ref_id:
+            ref_id = self.stateful_id
 
-    def _get_tfinit(self):
+        return self._get_s3_artifact(f"terraform.{ref_id}.tfplan.out",ref_id=ref_id)
+
+    def _get_tfinit(self, ref_id=None):
         """
         Retrieves a Terraform init artifact from an S3 bucket.
 
         :return: the content of the Terraform init artifact as a string
         """
-        return self._get_s3_artifact(f"terraform.{self.stateful_id}.init")
+        if not ref_id:
+            ref_id = self.stateful_id
 
-    def _get_tffmt(self):
+        return self._get_s3_artifact(f"terraform.{ref_id}.init",ref_id=ref_id)
+
+    def _get_tffmt(self, ref_id=None):
         """
         Retrieves a Terraform fmt artifact from an S3 bucket.
 
         :return: the content of the Terraform fmt artifact as a string
         """
-        return self._get_s3_artifact(f"terraform.{self.stateful_id}.fmt")
+        if not ref_id:
+            ref_id = self.stateful_id
 
-    def _get_tfvalidate(self):
+        return self._get_s3_artifact(f"terraform.{ref_id}.fmt",ref_id=ref_id)
+
+    def _get_tfvalidate(self, ref_id=None):
         """
         Retrieves a Terraform validate artifact from an S3 bucket.
 
         :return: the content of the Terraform validate artifact as a string
         """
-        return self._get_s3_artifact(f"terraform.{self.stateful_id}.validate")
+        if not ref_id:
+            ref_id = self.stateful_id
+
+        return self._get_s3_artifact(f"terraform.{ref_id}.validate",ref_id=ref_id)
 
     def _set_order(self):
         """
@@ -302,7 +458,7 @@ class GitPr(PlatformReporter):
 
         self.order = self.new_order(**inputargs)
 
-    def _get_tf_md(self):
+    def _get_tf_md(self, ref_id=None):
         """
         Generates a markdown string that summarizes the Terraform process steps:
         Initialization, Validation, and Plan. Each section provides details
@@ -311,14 +467,15 @@ class GitPr(PlatformReporter):
 
         Sections are only added if their content is not False.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A markdown formatted string with Terraform process details.
         """
         content = "## 🏗️ Terraform\n\n"
         
         # Get section contents
-        tf_init = self._get_tfinit()
-        tf_validate = self._get_tfvalidate()
-        tf_plan = self._get_tfplan()
+        tf_init = self._get_tfinit(ref_id=ref_id)
+        tf_validate = self._get_tfvalidate(ref_id=ref_id)
+        tf_plan = self._get_tfplan(ref_id=ref_id)
 
         # Add Initialization section if content exists
         if tf_init:
@@ -357,15 +514,16 @@ class GitPr(PlatformReporter):
         
         return content
 
-    def _get_tfsec_md(self):
+    def _get_tfsec_md(self, ref_id=None):
         """
         Generates a markdown string that summarizes the TFSec output:
         It retrieves the TFSec output from an S3 artifact and formats it
         with severity indicators and summary.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A markdown formatted string with TFSec output.
         """
-        _log = self._get_tfsec()
+        _log = self._get_tfsec(ref_id=ref_id)
 
         if not _log:
             return False
@@ -379,15 +537,16 @@ class GitPr(PlatformReporter):
         '''
         return content
 
-    def _get_infracost_md(self):
+    def _get_infracost_md(self, ref_id=None):
         """
         Generates a markdown string that summarizes the Infracost output:
         It retrieves the Infracost output from an S3 artifact and formats it
         with cost analysis details.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A markdown formatted string with Infracost output.
         """
-        _log = self._get_infracost()
+        _log = self._get_infracost(ref_id=ref_id)
         if not _log:
             return False
 
@@ -421,7 +580,7 @@ class GitPr(PlatformReporter):
 '''
         return content
 
-    def _get_pr_md(self):
+    def _get_pr_md(self, ref_id=None):
         """
         Generates a markdown string for the PR body that summarizes the Terraform process steps:
         Initialization, Validation, and Plan. Each section provides details
@@ -429,20 +588,21 @@ class GitPr(PlatformReporter):
         sections for better readability. Additionally, TFSec and Infracost outputs
         are included if available.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: dictionary with two keys: "comment_body" and "md5sum". The former
         is a markdown formatted string with Terraform process details, TFSec output,
         Infracost output, and CI details. The latter is the md5sum of the comment body.
         """
-        content = self._get_tf_md()
+        content = self._get_tf_md(ref_id=ref_id)
 
         try:
-            tf_sec_content = self._get_tfsec_md()
+            tf_sec_content = self._get_tfsec_md(ref_id=ref_id)
         except Exception as e:
             self.logger.debug(f"Failed to get TFSec content: {str(e)}")
             tf_sec_content = None
 
         try:
-            infracost_content = self._get_infracost_md()
+            infracost_content = self._get_infracost_md(ref_id=ref_id)
         except Exception as e:
             self.logger.debug(f"Failed to get Infracost content: {str(e)}")
             infracost_content = None
@@ -538,7 +698,7 @@ class GitPr(PlatformReporter):
 
         return self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
-    def eval_pr(self):
+    def eval_pr(self, ref_id=None):
         """
         Evaluate the PR and either add a new comment or update an existing one.
 
@@ -549,10 +709,11 @@ class GitPr(PlatformReporter):
         destroyed, the comment is either added or updated depending on whether an existing
         comment with the same md5sum exists.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A dictionary with the comment ID and its URL if the comment was
         added successfully, or False if the add failed.
         """
-        pr_md_info = self._get_pr_md()
+        pr_md_info = self._get_pr_md(ref_id=ref_id)
 
         if not self.run_info.get("destroy"):
             comment_info = self._eval_pr(pr_md_info)
@@ -630,7 +791,181 @@ class GitPr(PlatformReporter):
 
         self.set_search_tag()
 
-    def execute(self):
+    def _get_parallel_run_summary(self, run_id):
+        """
+        Get summary information for a single run.
+        
+        :param run_id: ID of the run to summarize
+        :return: Dictionary containing summary information for the run
+        """
+        values = self.db.table_runs.search_key(key="_id", value=run_id)["Items"][0]
+
+        return {
+            "iac_ci_folder": values.get("iac_ci_folder", "N/A"),
+            "run_id": run_id,
+            "status": values.get("status", "unknown")
+        }
+
+    def _get_parallel_runs_summary(self, run_ids):
+        """
+        Get summary information for multiple runs.
+        
+        :param run_ids: List of run IDs to summarize
+        :return: List of dictionaries containing summary information for each run
+        """
+        results = []
+
+        for run_id in run_ids:
+            results.append(self._get_parallel_run_summary(run_id))
+
+        return results
+
+    def _get_s3_link_url(self, run_id, file_type):
+        """
+        Generate a clickable URL for S3 files.
+        
+        Creates a web console URL for the S3 object that users can click.
+        
+        :param run_id: The run ID associated with the file
+        :param file_type: The type of file (tfplan, tfsec, infracost)
+        :return: A URL string
+        """
+        if file_type == "tfplan":
+            s3_key = f"{run_id}/cur/terraform.{run_id}.tfplan.out"
+        elif file_type == "tfsec":
+            s3_key = f"{run_id}/cur/tfsec.{run_id}.out"
+        elif file_type == "infracost":
+            s3_key = f"{run_id}/cur/infracost.{run_id}.out"
+        else:
+            return "#"
+            
+        # Create an AWS console URL for the S3 object
+        region = os.environ.get('AWS_REGION', 'us-east-1')  # Get region from env or default
+        #console_url = f"https://s3.console.aws.amazon.com/s3/object/{self.tmp_bucket}?region={region}&prefix={s3_key}"
+        s3_key = f"s3://{self.tmp_bucket}/{s3_key}"
+
+        return s3_key
+
+    def _get_pr_md_parallel_runs(self, runs_summary):
+        """
+        Generate a markdown table summarizing multiple runs.
+        
+        :param runs_summary: List of dictionaries containing summary information for each run
+        :return: Dictionary with comment_body and md5sum
+        """
+        # Initialize the content with a header
+        content = "## 🏗️ Terraform Multi-Folder Summary\n\n"
+        
+        # Initialize the table header
+        table = "| Folder | Terraform Plan | Security Scan | Cost Estimate |\n"
+        table += "|--------|---------------|--------------|---------------|\n"
+        
+        # Process each run and add to the table
+        for run in runs_summary:
+            run_id = run["run_id"]
+            folder = run.get("iac_ci_folder", "N/A")
+
+            # Get terraform plan data and analyze
+            tf_plan_data = self._get_tfplan(ref_id=run_id)
+            no_changes = self._analyze_tfplan_for_summary(tf_plan_data)
+
+            # Get tfsec data and analyze
+            tfsec_data = self._get_tfsec(ref_id=run_id)
+            tfsec_severity = self._analyze_tfsec_for_summary(tfsec_data)
+
+            # Get infracost data
+            infracost_data = self._get_infracost(ref_id=run_id,filetype="json")
+            monthly_cost = extract_infracost_monthly(infracost_data) if infracost_data else "N/A"
+            
+            # Generate S3 links
+            tf_plan_link = self._get_s3_link_url(run_id, "tfplan")
+            tfsec_link = self._get_s3_link_url(run_id, "tfsec")
+            infracost_link = self._get_s3_link_url(run_id, "infracost")
+            
+            # Format the terraform plan cell with icon
+            if no_changes:
+                tf_plan_cell = f"✅ [No Drift]({tf_plan_link})"
+            else:
+                tf_plan_cell = f"❌ [Drift Detected]({tf_plan_link})"
+
+            # Format the tfsec cell with icon based on severity
+            if tfsec_severity == "success":
+                tfsec_cell = f"✅ [No issues]({tfsec_link})"
+            elif tfsec_severity == "high":
+                tfsec_cell = f"❌ [Critical/High issues]({tfsec_link})"
+            elif tfsec_severity == "medium":
+                tfsec_cell = f"⚠️ [Medium issues]({tfsec_link})"
+            elif tfsec_severity == "low":
+                tfsec_cell = f"ℹ️ [Low issues]({tfsec_link})"
+            else:
+                tfsec_cell = f"❓ [N/A]({tfsec_link})"        # Question mark for unknown
+
+            # Format the infracost cell
+            infracost_cell = f"💰 [{monthly_cost}]({infracost_link})"
+            
+            # Add row to the table
+            table += f"| `{folder}` | {tf_plan_cell} | {tfsec_cell} | {infracost_cell} |\n"
+        
+        # Add the table to the content
+        content += table
+        
+        # Add additional information
+        #content += "\n### Legend:\n"
+        #content += "- ✅ - No changes or issues detected\n"
+        #content += "- ❌ - Changes or issues detected\n"
+        #content += "- ⚠️ - Medium severity issues\n"
+        #content += "- ℹ️ - Low severity issues\n"
+        #content += "- ❓ - Status unknown\n"
+        #content += "- 💰 - Estimated monthly cost\n\n"
+        #content += "Click on any cell to view the complete details in AWS console.\n"
+        
+        # Add CI details if available
+        ci_link_content = self._ci_links()
+        if ci_link_content:
+            content += ci_link_content
+            
+        # Create the comment body
+        comment_body = f'{content}\n\n#{self.search_tag}'
+        md5sum_str = get_hash_from_string(comment_body)
+        
+        return {
+            "comment_body": comment_body,
+            "md5sum": md5sum_str
+        }
+
+    def _exec_parallel_runs(self, run_ids=None):
+        """
+        Execute parallel runs analysis and create summary PR comment.
+        
+        :param run_ids: List of run IDs to include in the summary
+        :return: True if successful, False otherwise
+        """
+        self.logger.debug("#" * 32)
+        self.logger.json(run_ids)
+        
+        if not run_ids:
+            self.logger.debug("No run IDs provided for parallel runs")
+            return False
+            
+        runs_summary = self._get_parallel_runs_summary(run_ids)
+        pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
+        
+        existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
+        comment_info = self._update_comment(pr_md_info, existing_comments)
+        
+        self._clean_all_pr_comments()
+        
+        self.logger.debug("#" * 32)
+        
+        if comment_info and comment_info.get("status"):
+            self.results["notify"] = {
+                "links": [{"github comment": comment_info.get("url", "")}]
+            }
+            return True
+            
+        return False
+
+    def execute(self, ref_id=None):
         """
         Executes the main process for handling a GitHub pull request event.
 
@@ -641,6 +976,7 @@ class GitPr(PlatformReporter):
         the results to indicate the process is complete, logs a summary, and saves
         run information.
 
+        :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: True if execution is successful.
         """
 
@@ -657,10 +993,15 @@ class GitPr(PlatformReporter):
         self.results["update"] = True
         self.results["close"] = True
 
-        if self.failure_s3_key:
-            status = self._exec_failure()
+        parallel_folder_builds = self.run_info.get("parallel_folder_builds")
+
+        if self.report and parallel_folder_builds:
+            status = self._exec_parallel_runs(run_ids=parallel_folder_builds)
         else:
-            status = self._exec_successful()
+            if self.failure_s3_key:
+                status = self._exec_failure(ref_id=ref_id)
+            else:
+                status = self._exec_successful(ref_id=ref_id)
 
         if status:
             self.results["status"] = "successful"
@@ -680,15 +1021,15 @@ class GitPr(PlatformReporter):
 
         return True
 
-    def _exec_successful(self):
-        pr_info = self.eval_pr()
+    def _exec_successful(self, ref_id=None):
+        pr_info = self.eval_pr(ref_id=ref_id)
         self.results["notify"] = {
             "links": [{"github comment": pr_info["url"]}]
         }
 
         return True
 
-    def _exec_failure(self):
+    def _exec_failure(self, ref_id=None):
         # Retrieve failure log from S3
         failure_log = self._fetch_s3_artifact(self.failure_s3_key)
         if not failure_log:

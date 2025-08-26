@@ -14,6 +14,7 @@ from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.run_helper import Notification, CreateTempParamStoreEntry, GetFrmDb
 from iac_ci.common.serialization import b64_encode, b64_decode
 from iac_ci.common.utilities import id_generator, get_hash_from_string, rm_rf, id_generator2
+from iac_ci.common.utilities import clean_and_convert_data
 
 
 def get_queue_id(size=6, input_string=None):
@@ -67,15 +68,24 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         session = boto3.Session()
         self.ssm = session.client('ssm')
-
         self.lambda_client = LambdaBoto3()
 
+        self.app_name_iac = os.environ.get("APP_NAME_IAC", "iac-ci")
+        self.db = GetFrmDb(app_name=self.app_name_iac)
+
+        inputargs = self._eval_report_inputargs(**kwargs)
+        self.parent_run_id = inputargs.get("parent_run_id")
+        self.report = inputargs.get("report")
+
+        self.ssh_url = inputargs.get("ssh_url")
+        self.commit_hash = inputargs.get("commit_hash")
+
         self.stateful_id = None
-        self.iac_ci_id = kwargs.get("iac_ci_id")
-        self.run_id = kwargs.get("run_id")
-        self.trigger_id = kwargs.get("trigger_id")
-        self.build_id = kwargs.get("build_id")
-        self.step_func = kwargs.get("step_func")
+        self.iac_ci_id = inputargs.get("iac_ci_id")
+        self.run_id = inputargs.get("run_id")
+        self.trigger_id = inputargs.get("trigger_id")
+        self.build_id = inputargs.get("build_id")
+        self.step_func = inputargs.get("step_func")
 
         self.webhook_info = None
         self.queue_host = None
@@ -90,14 +100,10 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.build_env_vars = {}
         self.iac_platform = None
 
-        self.app_name_iac = os.environ.get("APP_NAME_IAC", "iac-ci")
-
         self.app_info_iac = {"name": self.app_name_iac}
         self.trigger_info = {}
         self.stateful_info = {}
         self.run_info = {}
-
-        self.db = GetFrmDb(app_name=self.app_name_iac)
 
         Notification.__init__(self)
         CreateTempParamStoreEntry.__init__(self)
@@ -122,6 +128,83 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             "run_id": self.run_id,
             "trigger_id": self.trigger_id
         }
+
+    def _get_kwargs_body(self,**kwargs):
+
+        body = {}
+
+        if kwargs.get("body"):
+            body = kwargs["body"]
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except json.JSONDecodeError:
+                    self.logger.error("Failed to decode body as JSON")
+
+        return body
+
+    def _eval_report_inputargs(self,**kwargs):
+
+        # testtest456
+        self.logger.debug("j0" * 32)
+        self.logger.json(kwargs)
+        self.logger.debug("j0"*32)
+
+        body = self._get_kwargs_body(**kwargs)
+
+        if not kwargs.get("report") and not body.get("report"):
+            return kwargs
+
+        self.logger.debug("j1" * 32)
+
+        if "_id" in kwargs:
+            inputargs = clean_and_convert_data(self.db.table_runs.search_key(key="_id", value=kwargs["_id"])["Items"][0])
+        elif "_id" in body:
+            inputargs = clean_and_convert_data(self.db.table_runs.search_key(key="_id", value=body["_id"])["Items"][0])
+        else:
+            raise Exception("need to provide _id in kwargs or body")
+
+        keys2pass = [
+            "status",
+            "close",
+            "initialized",
+            "update",
+            "notify",
+            "continue",
+            "trigger_id",
+            "event_type",
+            "commit_hash",
+            "execution_arn",
+            "console_url",
+            "status_comment_id",
+            "iac_ci_id"
+        ]
+
+        # for lambda stage
+        if body and body.get("parent_run_id"):
+            inputargs["parent_run_id"] = body["parent_run_id"]
+        # for pkg to s3 stage
+        elif body:
+            inputargs["parent_run_id"] = body["run_id"]
+        elif kwargs.get("run_id"):
+            inputargs["parent_run_id"] = kwargs["run_id"]
+
+        for key in keys2pass:
+            if key in body:
+                inputargs[key] = body[key]
+
+        inputargs["status"] = "in_progress"
+        inputargs["update"] = None
+        inputargs["report"] = True
+
+        # testtest456
+        self.logger.debug("k0"*32)
+        self.logger.json(kwargs)
+        self.logger.debug("k1"*32)
+        self.logger.json(inputargs)
+        self.logger.debug("k2"*32)
+
+        return inputargs
 
     def _set_infracost_api_key(self):
         """
@@ -548,11 +631,27 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if not self.stateful_id:
             raise Exception("stateful_id needs to be set")
 
-        commit_hash = self.webhook_info["commit_hash"]
-        self.local_src = f"/tmp/{commit_hash}.zip"
-        self.remote_src_bucket_key = f"{self.stateful_id}/state/src.{commit_hash}.zip"
-        self.remote_build_env_vars_key = f"{self.stateful_id}/state/{commit_hash}/build_env_vars.env.enc"
         self.remote_src_bucket = self.tmp_bucket
+        self.local_src = f'/tmp/{self.webhook_info["commit_hash"]}.zip'
+
+        if self.report:
+            ref_subkey = self.run_id
+        else:
+            ref_subkey = self.webhook_info["commit_hash"]
+
+        self.remote_src_bucket_key = f"{self.stateful_id}/state/src.{ref_subkey}.zip"
+        self.remote_build_env_vars_key = f"{self.stateful_id}/state/{ref_subkey}/build_env_vars.env.enc"
+
+    def _set_iac_ci_folder(self):
+
+        #self.iac_ci_folder = None
+        #if self.report and self.phase in ["update-pr"]:
+        #    return
+
+        try:
+            self.iac_ci_folder = self.run_info["iac_ci_folder"]
+        except:
+            self.iac_ci_folder = None
 
     def _set_add_class_vars(self):
         """
@@ -566,10 +665,31 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.ssm_ssh_key = self.trigger_info["ssm_ssh_key"]
         self.repo_name = self.trigger_info["repo_name"]
         self.git_depth = self.run_info.get("git_depth", 1)
-        self.stateful_id = self.iac_ci_info["stateful_id"]
-        self.app_dir = self.iac_ci_info["app_dir"]
-        self.iac_ci_folder = self.run_info["iac_ci_folder"]
+
+        self._set_iac_ci_folder()
+
+        if self.run_info.get("app_dir"):
+            self.app_dir = self.run_info["app_dir"]
+        else:
+            self.app_dir = self.iac_ci_info["app_dir"]
+
+        if self.report:
+            self.stateful_id = self.run_id
+        else:
+            self.stateful_id = self.iac_ci_info["stateful_id"]
+
+        self.run_share_dir = f'/var/tmp/share/{self.stateful_id}'
+
         self.set_s3_key()
+
+    def _set_s3_data_key(self):
+
+        # s3_key for run data
+        if self.report and self.parent_run_id:
+            # data is from the parent run_id
+            self.s3_data_key = f"{self.build_name}/runs/{self.parent_run_id}"
+        elif self.run_id:
+            self.s3_data_key = f"{self.build_name}/runs/{self.run_id}"
 
     def _setup(self):
         """
@@ -608,7 +728,13 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.tmp_bucket = self.trigger_info.get("s3_bucket_tmp")
         self.build_name = "iac-ci"
 
-        self.s3_key = f"{self.build_name}/runs/{self.run_id}"
+        self._set_s3_data_key()
+
+        # testtest456
+        #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0
+	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	provided run_id tgnrfq1756092177
+	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	pkgcode-to-s3
+	    #2025-08-25T03:23:02.557Z	5ef96825-ad42-4c5c-ae07-3a243446afa1	m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0m0
 
         try:
             self.build_timeout = int(self.trigger_info.get("build_timeout", 600))
@@ -617,23 +743,42 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         # this is a new run
         if not self.run_id:
-            return self._init_run_id()
+            self._init_run_id()
+            self._set_s3_data_key()
+            return {"status": True}
 
-        self.logger.debug(f"provided run_id {self.run_id}")
+        # testtest456
+        self.logger.debug("m0" * 32)
+        self.logger.debug(f"provided run_id: {self.run_id}")
+        self.logger.debug(f"s3_data_key: {self.s3_data_key}")
+        self.logger.debug(f"phase: {self.phase}")
+        self.logger.debug("m0" * 32)
 
         # existing run
         self._load_run_info()
         self._set_add_class_vars()
 
-        try:
-            self._init_build_env_vars()
-        except Exception:
-            self.logger.warn("could not get build_env_vars from s3 copy")
+        # bypassing the conventional class init vars
+        # with update-pr and reporting
+        #if self.phase == "update-pr" and self.report:
+        #    return {
+        #        "status":True,
+        #        "parallel_folder_builds": self.run_info.get("parallel_folder_builds")
+        #    }
+        #if not self.phase == "update-pr" and not self.report:
 
-        self.logger.debug("#" * 32)
-        self.logger.debug("# build_env_vars")
+        # testtest456
+        self.logger.debug("d0" * 32)
+        if self.phase not in [ "pkgcode-to-s3" ]:
+            try:
+                self.build_env_vars = json.loads(base64.b64decode(self.run_info["build_env_vars_b64"]).decode('utf-8'))
+            except Exception as e:
+                self.logger.error(f"could not decode build_env_vars_b64: {str(e)}")
+                self.build_env_vars = {}
+        else:
+            self.build_env_vars = {}
         self.logger.json(self.build_env_vars)
-        self.logger.debug("#" * 32)
+        self.logger.debug("d0"*32)
 
         if self.build_env_vars.get("DEBUG_IAC_CI"):
             os.environ["DEBUG_IAC_CI"] = "True"
@@ -675,7 +820,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.run_id = new_run_id()
         self.results["run_id"] = self.run_id
         self.results["_id"] = self.run_id
-        self.s3_key = f"{self.build_name}/runs/{self.run_id}"
         self._init_new_data()
         return {"status": True}
 
@@ -690,7 +834,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             bool: True if the data was successfully uploaded to S3.
         """
         srcfile = os.path.join("/tmp", id_generator())
-
+        self.logger.debug(f"putting data in s3: bucket: {self.tmp_bucket}, key: {self.s3_data_key}")
         _data_hash = b64_encode(json.dumps(self.data))
 
         with open(srcfile, 'w') as _file:
@@ -698,7 +842,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         self.s3_file.insert(
             s3_bucket=self.tmp_bucket,
-            s3_key=self.s3_key,
+            s3_key=self.s3_data_key,
             srcfile=srcfile
         )
 
@@ -716,11 +860,14 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Returns:
             bool: True if the data was successfully retrieved and loaded.
         """
+
+        self.logger.debug(f"getting data from s3: bucket: {self.tmp_bucket}, key: {self.s3_data_key}")
+
         dstfile = os.path.join("/tmp", id_generator())
 
         self.s3_file.get(
             s3_bucket=self.tmp_bucket,
-            s3_key=self.s3_key,
+            s3_key=self.s3_data_key,
             dstfile=dstfile
         )
 
@@ -1464,41 +1611,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         self.results["publish_vars"].update(values)
 
-    def _init_build_env_vars(self):
-        """
-        Initializes build environment variables from an encrypted file in S3.
-        
-        This method retrieves an encrypted environment variables file from S3,
-        decodes it, and parses each line to populate the build_env_vars dictionary.
-        
-        Returns:
-            None
-        """
-        dstfile = os.path.join("/tmp", id_generator())
-
-        self.s3_file.get(
-            s3_bucket=self.remote_src_bucket,
-            s3_key=self.remote_build_env_vars_key,
-            dstfile=dstfile
-        )
-
-        with open(dstfile, 'rb') as enc_file:
-            encoded_content = enc_file.read()
-            decoded_content = base64.b64decode(encoded_content)
-            env_var_lines = decoded_content.decode('utf-8').strip().splitlines()
-
-            for line in env_var_lines:
-                if '=' in line:
-                    _key, _value = line.split('=', 1)
-                    key = _key.strip()
-                    value = _value.strip()
-                    
-                    if not key or not value:
-                        continue
-                        
-                    self.build_env_vars[key] = value
-
-    def init_build_vars(self):
+    def set_additional_build_vars(self):
         """
         Initializes build variables.
 
@@ -1510,15 +1623,33 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Returns:
             None
         """
-        self.remote_stateful_bucket = self.trigger_info["remote_stateful_bucket"]
-        self.stateful_id = self.iac_ci_info["stateful_id"]
-        self.tf_runtime = self.iac_ci_info["tf_runtime"]
-        self.app_dir = self.iac_ci_info["app_dir"]
-        self.run_share_dir = f'/var/tmp/share/{self.stateful_id}'
-        self.s3_output_folder = id_generator2()
-        self.aws_region = self.iac_ci_info.get("aws_default_region", "us-east-1")
-        ssm_name = self.iac_ci_info.get("ssm_name")
 
+        self.remote_stateful_bucket = self.trigger_info["remote_stateful_bucket"]
+
+        self.logger.debug("#" * 32)
+        self.logger.debug("# build_env_vars")
+
+        self.s3_output_folder = id_generator2()
+
+        if self.report:
+            # testtest456
+            self.logger.debug("n0" * 32)
+            self.logger.debug("overwriting build_env_vars for report/parallel folders")
+            self.build_env_vars["RUN_ID"] = self.run_id
+            self.build_env_vars["STATEFUL_ID"] = self.run_id
+            self.build_env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
+        self.logger.json(self.build_env_vars)
+        self.logger.debug("#" * 32)
+        # testtest456
+        self.logger.debug("n0" * 32)
+
+        self.tf_runtime = self.iac_ci_info["tf_runtime"]
+        self.aws_region = self.iac_ci_info.get("aws_default_region", "us-east-1")
+
+
+        # TODO: may want to change this on a run level
+        # ssm_name and infracost_api_key is typically set at the repo level
+        ssm_name = self.iac_ci_info.get("ssm_name")
         infracost_api_key = self._set_infracost_api_key()
 
         update_ssm_values = {}

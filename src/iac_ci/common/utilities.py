@@ -21,6 +21,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import string
+from decimal import Decimal
+from datetime import datetime
+
 import random
 import json
 import os
@@ -220,3 +223,47 @@ def get_hash_from_string(_string):
     str: The MD5 hash of the input string.
     """
     return hashlib.md5(_string.encode('utf-8')).hexdigest()
+
+def clean_and_convert_data(data):
+    """
+    Recursively cleans a dictionary by removing unserializable values and converting special cases.
+    
+    Args:
+        data (dict or list): The data to be cleaned and converted.
+
+    Returns:
+        dict or list: A JSON-serializable version of the input data.
+    """
+    def is_json_serializable(value):
+        """Checks if a value is JSON-serializable."""
+        try:
+            json.dumps(value)
+            return True
+        except (TypeError, OverflowError):
+            return False
+
+    if isinstance(data, dict):
+        # Process each key-value pair in the dictionary
+        return {
+            key: clean_and_convert_data(value)
+            for key, value in data.items()
+            if is_json_serializable(value) or isinstance(value, (dict, list, Decimal))
+        }
+    elif isinstance(data, list):
+        # Process each item in the list
+        return [clean_and_convert_data(item) for item in data if is_json_serializable(item) or isinstance(item, (dict, list, Decimal))]
+    elif isinstance(data, Decimal):
+        # Convert Decimal to string or float
+        return str(data)  # Or use float(data)
+    elif isinstance(data, (int, float)) and data > 1e9:
+        # Convert large numbers (e.g., timestamps) to readable dates
+        try:
+            return datetime.utcfromtimestamp(data).strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            return data  # If not a valid timestamp, keep the original value
+    elif is_json_serializable(data):
+        # Return the value if it's serializable
+        return data
+    else:
+        # Remove the value if it's not serializable
+        return None

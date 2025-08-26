@@ -10,13 +10,16 @@ License: GNU General Public License v3.0
 
 import shutil
 import os
+import json
 import base64
 import traceback
 
+from iac_ci.common.run_helper import GetFrmDb
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.utilities import find_filename
 from iac_ci.common.utilities import id_generator
 from iac_ci.common.utilities import rm_rf
+from iac_ci.common.utilities import clean_and_convert_data
 from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.orders import PlatformReporter
 from iac_ci.common.gitclone import CloneCheckOutCode
@@ -34,8 +37,12 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
     def __init__(self, **kwargs):
         self.classname = "PkgCodeToS3"
         self.logger = IaCLogger(self.classname)
+
         PlatformReporter.__init__(self, **kwargs)
-        CloneCheckOutCode.__init__(self, **kwargs)
+
+        CloneCheckOutCode.__init__(self,
+                                   ssh_url=self.ssh_url,
+                                   commit_hash=self.commit_hash)
 
         self.app_dir = None
         self.archive_dir = None
@@ -43,14 +50,13 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         self.repo_name = None
         self.phase = "pkgcode-to-s3"
         self.maxtime = 180
-
         self._set_order()
 
     def _set_order(self):
         """
         Sets the order for the current process with a human-readable description
         and a specified role. It constructs input arguments including a description
-        of fetching code and uploading to s3 and assigns the order using the new_order method.
+        of fetching code and uploading to s3 and assignis the order using the new_order method.
         """
         human_description = "Fetch code and upload to s3"
         inputargs = {
@@ -80,6 +86,12 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
             self.logger.debug(f"No build_env_vars.env.enc file found in '{self.archive_dir}'")
             return {}
 
+        # testtest456
+        self.logger.debug(f"b3"*32)
+        self.logger.debug(f"build_env_vars.env.enc file found in '{self.archive_dir}'")
+        self.logger.debug(f"run_id '{self.run_id}'")
+        self.logger.debug(f"b3"*32)
+
         build_file_path = match_files[0]
 
         env_vars = {}
@@ -95,13 +107,20 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
                         env_vars[key.strip()] = value.strip()
         except (IOError, UnicodeDecodeError) as e:
             self.logger.debug(f"Error processing build environment variables file: {e}")
-            return {}
 
-        self.s3_file.insert(
-            s3_bucket=self.remote_src_bucket,
-            s3_key=self.remote_build_env_vars_key,
-            srcfile=build_file_path
-        )
+        # testtest456
+        if self.report:
+            env_vars["RUN_ID"] = self.run_id
+            env_vars["STATEFUL_ID"] = self.run_id
+            env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
+
+        if os.environ.get('DEBUG_IAC_CI'):
+            self.logger.debug("#"*32)
+            self.logger.debug(f"# env_vars inserted to {self.remote_src_bucket}/{self.remote_build_env_vars_key}")
+            self.logger.json(env_vars)
+            self.logger.debug("#"*32)
+        else:
+            self.logger.debug(f"# env_vars inserted to {self.remote_src_bucket}/{self.remote_build_env_vars_key}")
 
         return env_vars
 
@@ -116,6 +135,10 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         Raises:
             Exception: if any of the commands fail
         """
+        # testtest456
+        self.logger.debug("s0"*32)
+        self.logger.debug(f'archive_directory="{self.archive_dir}"')
+        self.logger.debug("s0"*32)
         os.chdir(self.archive_dir)
 
         shutil.make_archive(
@@ -124,7 +147,7 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
             verbose=True
         )
 
-        # for some reason, if set self.s3_key and insert it here
+        # for some reason, if set self.s3_data_key and insert it here
         # the upload to s3 is an ascii file
         self.s3_file.insert(
             s3_bucket=self.remote_src_bucket,
@@ -151,6 +174,18 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         """
         self.run_info["remote_src_bucket"] = self.remote_src_bucket
         self.run_info["remote_src_bucket_key"] = self.remote_src_bucket_key
+
+        try:
+            if self.phase not in self.run_info.get("phases"):
+                self.run_info["phases"].append(self.phase)
+        except:
+            self.logger.warn("could not update phases in run_info")
+
+        # testtest456
+        self.logger.debug("c0"*32)
+        self.logger.json(clean_and_convert_data(self.run_info))
+        self.logger.debug("c0"*32)
+
         self.db.table_runs.insert(self.run_info)
         msg = f"trigger_id/{self.trigger_id} iac_ci_id/{self.iac_ci_id} saved"
         self.add_log(msg)
@@ -161,7 +196,7 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
 
         try:
             self.write_private_key()
-            self.fetch_code()
+            self.fetch_code(iac_ci_folder_must_exists=True)
             self._archive_code()
         except:
             failed_message = traceback.format_exc()
@@ -225,6 +260,14 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         self.results["msg"] = f"code fetched repo_name {self.repo_name}, commit_hash {self.commit_hash} to {self.remote_src_bucket}/{self.remote_src_bucket_key}"
         self.results["update"] = True
         self.results["continue"] = True
+
+        if self.report:
+            self.run_info["report"] = True
+            self.results["report"] = True
+
+        if self.parent_run_id:
+            self.results["parent_run_id"] = self.parent_run_id
+            self.run_info["parent_run_id"] = self.parent_run_id
 
         self.insert_to_return()
 

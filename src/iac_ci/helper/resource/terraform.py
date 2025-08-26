@@ -321,11 +321,14 @@ class TFCmdOnAWS(TFAppHelper):
         cmds.extend(self._get_tf_plan(destroy=True))
         return cmds
 
-    def get_tf_chk_drift(self):
+    def get_tf_chk_drift(self,cmds_alone=None):
         """Get commands for checking infrastructure drift"""
         cmds = self._get_tf_init()
-        cmds.extend([
+        add_cmds = [
             f'({self.base_cmd} refresh)',
             f'({self.base_cmd} plan -detailed-exitcode)'
-        ])
+        ]
+        if cmds_alone:
+            return add_cmds
+        cmds.extend(add_cmds)
         return cmds

@@ -37,12 +37,13 @@ class TriggerLambdabuild(PlatformReporter):
     def __init__(self, **kwargs):
         self.classname = "TriggerLambda"
         self.logger = IaCLogger(self.classname)
+
         PlatformReporter.__init__(self, **kwargs)
 
         self.phase = "trigger-lambda"
         self.build_timeout = 300
 
-    def _exec_in_aws(self, method="ci"):
+    def _exec_in_aws(self):
         """
         Execute the build in AWS
 
@@ -64,11 +65,21 @@ class TriggerLambdabuild(PlatformReporter):
 
         if plan_destroy:
             cinputargs = self.get_aws_exec_cinputargs(method="plan_destroy")
+        elif self.report:
+            cinputargs = self.get_aws_exec_cinputargs(method="report")
         else:
-            cinputargs = self.get_aws_exec_cinputargs(method=method)
+            cinputargs = self.get_aws_exec_cinputargs(method="ci")
 
         if self.infracost_api_key:
             cinputargs["infracost_api_key"] = self.infracost_api_key
+
+        # testtest456
+        self.logger.debug("#" * 32)
+        self.logger.debug("# cinputargs")
+        self.logger.json(cinputargs)
+        self.logger.debug("#" * 32)
+        self.logger.json(self.build_env_vars)
+        self.logger.debug("#" * 32)
 
         if os.environ.get("DEBUG_IAC_CI"):
             self.logger.debug("#" * 32)
@@ -93,7 +104,7 @@ class TriggerLambdabuild(PlatformReporter):
         The method constructs input arguments including a description of triggering a lambda build 
         and assigns the order using the new_order method.
         """
-        human_description = f"Trigger lambda build {self.s3_key}"
+        human_description = f"Trigger lambda build {self.s3_data_key}"
 
         inputargs = {
             "human_description": human_description,
@@ -110,6 +121,16 @@ class TriggerLambdabuild(PlatformReporter):
         table in DynamoDB and log a message indicating that the trigger_id has
         been saved.
         """
+
+        try:
+            if self.phase not in self.run_info.get("phases"):
+                self.run_info["phases"].append(self.phase)
+        except:
+            self.logger.warn("could not update phases in run_info")
+
+        if self.report and "status" in self.results:
+            self.run_info["status"] = self.results["status"]
+
         self.db.table_runs.insert(self.run_info)
         msg = f"trigger_id: {self.trigger_id} saved"
         self.add_log(msg)
@@ -161,10 +182,10 @@ class TriggerLambdabuild(PlatformReporter):
             bool: True if execution is successful.
         """
         self._set_order()
-        self.init_build_vars()
+        self.set_additional_build_vars()
         self.set_s3_key()
 
-        results = self._exec_in_aws(method="ci")
+        results = self._exec_in_aws()
 
         try:
             _log = self._get_log_frm_s3()

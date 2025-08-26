@@ -92,7 +92,7 @@ class TriggerCodebuild(PlatformReporter):
         of triggering a codebuild build with the s3 key and assigns the order using
         the new_order method.
         """
-        human_description = f"Trigger codebuild build {self.s3_key}"
+        human_description = f"Trigger codebuild build {self.s3_data_key}"
 
         inputargs = {
             "human_description": human_description,
@@ -128,7 +128,7 @@ class TriggerCodebuild(PlatformReporter):
             RuntimeError: If the AWS CodeBuild execution fails.
         """
         self._set_order()
-        self.init_build_vars()
+        self.set_additional_build_vars()
         self.set_s3_key()
 
         self.results["publish_vars"] = {

@@ -18,6 +18,7 @@
 Lambda function handler for packaging code to S3.
 """
 
+import json
 from iac_ci.helper.cloud.lambda_helper import LambdaHandler, return_thru_lambda
 from main_s3 import PkgCodeToS3 as Main
 
