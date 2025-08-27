@@ -664,7 +664,7 @@ class GitPr(PlatformReporter):
 
         return get_hash_from_string(_obj)
 
-    def _update_comment(self, pr_md_info, existing_comments=None, overwrite=True):
+    def _upsert_comment(self, pr_md_info, existing_comments=None, overwrite=True):
         """
         Updates an existing comment in the PR with the latest comment body.
 
@@ -676,24 +676,25 @@ class GitPr(PlatformReporter):
         :return: A dictionary with the comment ID and its URL if the comment was
         updated successfully, or False if the update failed.
         """
-        if not existing_comments:
-            return False
+        if not existing_comments or len(existing_comments) == 1:
+            self.logger.debug('Adding new comment - no existing comments found.')
+            return self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
-        if not len(existing_comments) == 1:
-            return False
+        try:
+            comment_id = existing_comments[0]["id"]
+        except:
+            comment_id = None
 
-        comment_id = existing_comments[0]["id"]
+        if not overwrite:
+            self.logger.debug(f'Updating existing comment_id: {comment_id}')
 
-        if overwrite:
-            comment_info = {"status":False}
-        else:
-            self.logger.debug(f'overwriting existing comment_id: {comment_id}')
             comment_info = self.github_repo.update_pr_comment(comment_id,
                                                               pr_md_info["comment_body"])
 
-        if not comment_info.get("status"):
-            self.logger.debug(f"failed to update comment_id: {comment_id}.")
-            self.github_repo.delete_pr_comment(comment_id)
+        if overwrite or not comment_info.get("status"):
+            if comment_id:
+                self.github_repo.delete_pr_comment(comment_id)
+            self.logger.debug('Adding new comment instead.')
             comment_info = self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
         return comment_info
@@ -725,7 +726,7 @@ class GitPr(PlatformReporter):
 
         return self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
-    def eval_pr(self, ref_id=None):
+    def _exec_successful(self, ref_id=None):
         """
         Evaluate the PR and either add a new comment or update an existing one.
 
@@ -743,44 +744,30 @@ class GitPr(PlatformReporter):
         pr_md_info = self._get_pr_md(ref_id=ref_id)
 
         if not self.run_info.get("destroy"):
-            comment_info = self._eval_pr(pr_md_info)
+            existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
+            comment_info = self._upsert_comment(pr_md_info, existing_comments, overwrite=True)
         else:
             self.logger.debug(f"Adding new comment comment_id for destroy.")
             comment_info = self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
-        pr_md_info.update(comment_info)
-
-        pr_md_info.update({
-            "_id": self._get_pr_id(),
-            "type": "pr_info"
-        })
-
         self._clean_all_pr_comments()
 
-        return pr_md_info
+        try:
+            pr_md_info.update(comment_info)
 
-    def _eval_pr(self, pr_md_info):
-        """
-        Evaluate the PR and either update an existing comment or add a new one.
+            pr_md_info.update({
+                "_id": self._get_pr_id(),
+                "type": "pr_info"
+            })
 
-        If an existing comment with the same md5sum exists, the comment is updated.
-        Otherwise, a new comment is added.
+            self.results["notify"] = {
+                "links": [{"github comment": pr_md_info["url"]}]
+            }
+        except Exception as e:
+            self.logger.debug(f'Failed to update pr_md_info with comment_info: {str(e)}')
+            return False
 
-        :param pr_md_info: A dictionary with two keys: "comment_body" and "md5sum". The former
-        is a markdown formatted string with Terraform process details, TFSec output,
-        Infracost output, and CI details. The latter is the md5sum of the comment body.
-        :return: A dictionary with the comment ID and its URL if the comment was
-        added successfully, or False if the add failed.
-        """
-        existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
-
-        if existing_comments:
-            comment_info = self._update_comment(pr_md_info, existing_comments)
-        else:
-            self.logger.debug(f"Adding new comment comment_id.")
-            comment_info = self.github_repo.add_pr_comment(pr_md_info["comment_body"])
-
-        return comment_info
+        return True
 
     def _save_run_info(self):
         """
@@ -1013,29 +1000,30 @@ class GitPr(PlatformReporter):
         :param run_ids: List of run IDs to include in the summary
         :return: True if successful, False otherwise
         """
-        self.logger.debug("#" * 32)
-        self.logger.json(run_ids)
-        
+
         if not run_ids:
             self.logger.debug("No run IDs provided for parallel runs")
             return False
-            
+
+        self.logger.debug("#" * 32)
+        self.logger.debug('# Executing parallel runs analysis for run_ids')
+        self.logger.json(run_ids)
+        self.logger.debug("#" * 32)
+
         runs_summary = self._get_parallel_runs_summary(run_ids)
         pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
         
         existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
-        comment_info = self._update_comment(pr_md_info, existing_comments)
-        
-        self._clean_all_pr_comments()
-        
-        self.logger.debug("#" * 32)
-        
+        comment_info = self._upsert_comment(pr_md_info, existing_comments, overwrite=True)
+
+        #self._clean_all_pr_comments()
+
         if comment_info and comment_info.get("status"):
             self.results["notify"] = {
                 "links": [{"github comment": comment_info.get("url", "")}]
             }
             return True
-            
+
         return False
 
     def execute(self, ref_id=None):
@@ -1091,14 +1079,6 @@ class GitPr(PlatformReporter):
         self.insert_to_return()
         self.finalize_order()
         self._save_run_info()
-
-        return True
-
-    def _exec_successful(self, ref_id=None):
-        pr_info = self.eval_pr(ref_id=ref_id)
-        self.results["notify"] = {
-            "links": [{"github comment": pr_info["url"]}]
-        }
 
         return True
 

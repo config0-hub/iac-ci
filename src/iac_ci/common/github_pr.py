@@ -59,6 +59,10 @@ class GitHubRepo:
         self._set_base_urls()
         self._set_repo_urls(repo_name, pr_number, owner=kwargs.get("owner"))
         self.search_tag = kwargs.get("search_tag")
+
+        if self.search_tag:
+            self.logger.debug(f"Using search_tag: {self.search_tag}")
+
         self.apply = None
 
     def _set_repo_urls(self, repo_name, pr_number, owner=None):
@@ -214,7 +218,7 @@ class GitHubRepo:
             self.logger.debug(f"get_pr_comments: using search_tag {search_tag}")
             return self._filter_comment_by_tag(comments, search_tag=search_tag)
         elif use_default_search_tag:
-            self.logger.debug(f"get_pr_comments: using search_tag {self.search_tag}")
+            self.logger.debug(f"get_pr_comments: using default search_tag {self.search_tag}")
             return self._filter_comment_by_tag(comments, search_tag=self.search_tag)
 
         return comments

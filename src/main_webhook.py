@@ -32,7 +32,6 @@ from iac_ci.common.loggerly import IaCLogger
 from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.gitclone import CloneCheckOutCode
 from iac_ci.common.serialization import b64_decode
-from iac_ci.common.utilities import id_generator
 
 
 class WebhookProcess(PlatformReporter, CloneCheckOutCode):

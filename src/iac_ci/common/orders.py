@@ -366,13 +366,22 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Returns:
             str: The generated search tag.
         """
+
+        #tags = [
+        #    "iac-ci",
+        #    self.iac_ci_info["stateful_id"],
+        #    f'pr_number:{self.webhook_info["pr_number"]}'
+        #]
+
         tags = [
             "iac-ci",
-            self.iac_ci_info["stateful_id"],
+            self.webhook_info["repo_name"],
             f'pr_number:{self.webhook_info["pr_number"]}'
         ]
 
         self.search_tag = f'iac-ci:::tag::{get_hash_from_string(".".join(tags))}'
+
+        self.logger.debug(f'set_search_tag: {self.search_tag} with repo_name and pr_number')
 
         return self.search_tag
     
@@ -1599,7 +1608,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self.s3_output_folder = id_generator2()
 
         if self.report:
-            self.logger.debug("overwriting build_env_vars for report/parallel folders")
+            self.logger.debug("Overwriting build_env_vars for report/parallel folders")
             self.build_env_vars["RUN_ID"] = self.run_id
             self.build_env_vars["STATEFUL_ID"] = self.run_id
             self.build_env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
