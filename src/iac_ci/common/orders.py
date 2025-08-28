@@ -246,7 +246,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         else:
             return
 
-    def clean_pr_comments(self,ignore_expire_epoch=True):
+    def clean_pr_comments(self,search_tag="#iac-ci:::status_comment",ignore_expire_epoch=True):
         """
         Cleans up outdated or irrelevant pull request comments in the GitHub repository.
 
@@ -260,7 +260,6 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if not hasattr(self, "github_repo") or not self.github_repo:
             return False
 
-        search_tag = "#iac-ci:::status_comment"
         comments = self.github_repo.get_pr_comments(search_tag=search_tag)
 
         if not comments:
@@ -634,14 +633,17 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         else:
             ref_subkey = self.webhook_info["commit_hash"]
 
-        self.remote_src_bucket_key = f"{self.stateful_id}/state/src.{ref_subkey}.zip"
-        self.remote_build_env_vars_key = f"{self.stateful_id}/state/{ref_subkey}/build_env_vars.env.enc"
+        if self.report and self.phase in ["update-pr"]:
+            return
+
+        if not self.iac_ci_folder:
+            raise Exception("set_s3_key: iac_ci_folder needs to be set")
+
+        common_base = f'{self.webhook_info["repo_name"]}/{self.webhook_info["branch"]}/{str(self.webhook_info["pr_number"])}/{self.iac_ci_folder}'
+        self.remote_src_bucket_key = f'{common_base}/state/src.{ref_subkey}.zip'
+        self.remote_build_env_vars_key = f'{common_base}/state/{ref_subkey}/build_env_vars.env.enc'
 
     def _set_iac_ci_folder(self):
-
-        #self.iac_ci_folder = None
-        #if self.report and self.phase in ["update-pr"]:
-        #    return
 
         try:
             self.iac_ci_folder = self.run_info["iac_ci_folder"]

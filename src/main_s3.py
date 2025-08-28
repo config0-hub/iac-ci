@@ -10,11 +10,9 @@ License: GNU General Public License v3.0
 
 import shutil
 import os
-import json
 import base64
 import traceback
 
-from iac_ci.common.run_helper import GetFrmDb
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.utilities import find_filename
 from iac_ci.common.utilities import id_generator

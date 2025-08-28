@@ -146,6 +146,17 @@ class S3FileBoto3(Boto3Common):
         s3_bucket = kwargs["s3_bucket"]
 
         return self.client.download_file(s3_bucket, s3_key, dstfile)
+
+    def copy(self, src_s3_bucket, src_s3_key, dst_s3_bucket, dst_s3_key):
+
+        copy_source = {
+            'Bucket': src_s3_bucket,
+            'Key': src_s3_key
+        }
+
+        obj = self.resource.Object(dst_s3_bucket, dst_s3_key)
+
+        return obj.copy(copy_source)
         
     def exists(self, s3_bucket, s3_key):
         """

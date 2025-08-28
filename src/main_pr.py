@@ -271,6 +271,7 @@ class GitPr(PlatformReporter):
 
         self.s3 = boto3.resource('s3')
         self.search_tag = None
+        self.base_report_tag = "iac-ci:::tag::report"
         self.failure_s3_key = None
 
         if kwargs.get("failure_s3_key"):
@@ -368,6 +369,7 @@ class GitPr(PlatformReporter):
         :param ref_id: Optional reference ID to use instead of stateful_id
         :return: the content of the file as a string
         """
+
         if not ref_id:
             ref_id = self.stateful_id
 
@@ -385,9 +387,9 @@ class GitPr(PlatformReporter):
         self.logger.debug(f'Attempting to retrieve file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
         
         file_info = self.s3_file.exists_and_get(format="list",
-                                              s3_bucket=self.tmp_bucket,
-                                              s3_key=s3_key,
-                                              stream=True)
+                                                s3_bucket=self.tmp_bucket,
+                                                s3_key=s3_key,
+                                                stream=True)
 
         if file_info["status"] is False:
             self.logger.debug(f'Failed to retrieve file: s3_bucket: {self.tmp_bucket}/s3_key: {s3_key}')
@@ -850,7 +852,7 @@ class GitPr(PlatformReporter):
 
         return results
 
-    def _get_s3_link_url(self, ref_id, file_type):
+    def _get_s3_link_url(self, ref_id, iac_ci_folder, file_type):
         """
         Generate a clickable S3 URL for accessing artifacts.
         
@@ -861,18 +863,29 @@ class GitPr(PlatformReporter):
         :param file_type: The type of file (tfplan, tfsec, infracost)
         :return: A properly formatted S3 URL string
         """
+        s3_base_ref_path = f'{self.repo_name}/{self.branch}/{str(self.pr_number)}/{iac_ci_folder}'
+
         if file_type == "tfplan":
-            s3_key = f"{ref_id}/cur/terraform.{ref_id}.tfplan.out"
+            src_key = f"{ref_id}/cur/terraform.{ref_id}.tfplan.out"
+            dest_key = f"{s3_base_ref_path}/cur/terraform.{ref_id}.tfplan.out"
         elif file_type == "tfsec":
-            s3_key = f"{ref_id}/cur/tfsec.{ref_id}.out"
+            src_key = f"{ref_id}/cur/tfsec.{ref_id}.out"
+            dest_key = f"{s3_base_ref_path}/cur/tfsec.{ref_id}.out"
         elif file_type == "infracost":
-            s3_key = f"{ref_id}/cur/infracost.{ref_id}.out"
+            src_key = f"{ref_id}/cur/infracost.{ref_id}.out"
+            dest_key = f"{s3_base_ref_path}/cur/infracost.{ref_id}.out"
         else:
             return "#"
-            
-        # Create a properly formatted S3 URL
-        s3_url = f"s3://{self.tmp_bucket}/{s3_key}"
-        
+
+        # Copy the file within the same bucket
+        try:
+            self.s3_file.copy(self.tmp_bucket, src_key, self.tmp_bucket, dest_key)
+            self.logger.debug(f"File copied from {src_key} to {dest_key} within the same bucket.")
+            s3_url = f"s3://{self.tmp_bucket}/{dest_key}"
+        except Exception as e:
+            self.logger.debug(f"Error occurred while copying: {e}")
+            s3_url = f"s3://{self.tmp_bucket}/{src_key}"
+
         return s3_url
     
     def _get_pr_md_parallel_runs(self, runs_summary):
@@ -912,9 +925,9 @@ class GitPr(PlatformReporter):
             monthly_cost = extract_infracost_monthly(infracost_data) if infracost_data else "N/A"
 
             # Generate S3 links
-            tf_plan_link = self._get_s3_link_url(run_id, "tfplan")
-            tfsec_link = self._get_s3_link_url(run_id, "tfsec")
-            infracost_link = self._get_s3_link_url(run_id, "infracost")
+            tf_plan_link = self._get_s3_link_url(run_id, folder, "tfplan")
+            tfsec_link = self._get_s3_link_url(run_id, folder, "tfsec")
+            infracost_link = self._get_s3_link_url(run_id, folder, "infracost")
 
             # Create anchor links to the appropriate sections in the appendix
             tf_plan_anchor = f"#{folder_anchor}-plan"
@@ -985,13 +998,36 @@ class GitPr(PlatformReporter):
             content += "\n" + ci_link_content
 
         # Create the comment body
-        comment_body = f'{content}\n\n#{self.search_tag}'
+        comment_body = f'{content}\n\n#{self.base_report_tag} summary'
         md5sum_str = get_hash_from_string(comment_body)
 
         return {
             "comment_body": comment_body,
             "md5sum": md5sum_str
         }
+    
+    def _clear_report_all_comments(self):
+
+        if not hasattr(self, "github_repo") or not self.github_repo:
+            return False
+
+        search_tag = "report all tf"
+
+        comments = self.github_repo.get_pr_comments(search_tag=search_tag)
+        report_comments = self.github_repo.get_pr_comments(search_tag=f'#{self.base_report_tag}')
+
+        if comments and len(comments) > 1:
+            comments.sort(key=lambda comment: comment["id"])
+            for comment in comments[:-1]:
+                comment_id = comment["id"]
+                self.logger.debug(f'deleting "report all tf" comment {comment_id}')
+                self.github_repo.delete_pr_comment(comment_id)
+
+        if report_comments:
+            for comment in report_comments:
+                comment_id = comment["id"]
+                self.logger.debug(f'deleting report related comment {comment_id}')
+                self.github_repo.delete_pr_comment(comment_id)
 
     def _exec_parallel_runs(self, run_ids=None):
         """
@@ -1012,11 +1048,12 @@ class GitPr(PlatformReporter):
 
         runs_summary = self._get_parallel_runs_summary(run_ids)
         pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
-        
+
+        self._clear_report_all_comments()
+        self._clean_all_pr_comments()
+
         existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
         comment_info = self._upsert_comment(pr_md_info, existing_comments, overwrite=True)
-
-        #self._clean_all_pr_comments()
 
         if comment_info and comment_info.get("status"):
             self.results["notify"] = {
