@@ -500,11 +500,17 @@ class GitPr(PlatformReporter):
         :return: A markdown formatted string with Terraform process details.
         """
         content = "## 🏗️ Terraform\n\n"
-        
+
         # Get section contents
-        tf_init = self._get_tfinit(ref_id=ref_id)
-        tf_validate = self._get_tfvalidate(ref_id=ref_id)
+        if self.report:
+            tf_init = None
+            tf_validate = None
+        else:
+            tf_init = self._get_tfinit(ref_id=ref_id)
+            tf_validate = self._get_tfvalidate(ref_id=ref_id)
+
         tf_plan = self._get_tfplan(ref_id=ref_id)
+        plan_summary = extract_plan_summary(tf_plan) if tf_plan else None
 
         # Add Initialization section if content exists
         if tf_init:
@@ -541,7 +547,10 @@ class GitPr(PlatformReporter):
 </details>
 '''
         
-        return content
+        return {
+            "content": content,
+            "plan_summary": plan_summary
+        }
 
     def _get_tfsec_md(self, ref_id=None):
         """
@@ -552,6 +561,7 @@ class GitPr(PlatformReporter):
         :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A markdown formatted string with TFSec output.
         """
+        # Get tfsec data and analyze
         _log = self._get_tfsec(ref_id=ref_id)
 
         if not _log:
@@ -564,7 +574,13 @@ class GitPr(PlatformReporter):
     
 </details>
         '''
-        return content
+
+        tfsec_severity = self._analyze_tfsec_for_summary(_log)
+
+        return {
+            "content":content,
+            "tfsec_severity": tfsec_severity
+        }
 
     def _get_infracost_md(self, ref_id=None):
         """
@@ -576,8 +592,14 @@ class GitPr(PlatformReporter):
         :return: A markdown formatted string with Infracost output.
         """
         _log = self._get_infracost(ref_id=ref_id)
+        infracost_data = self._get_infracost(ref_id=ref_id, filetype="json")
+        monthly_cost = extract_infracost_monthly(infracost_data) if infracost_data else "N/A"
+
         if not _log:
-            return False
+            return {
+                "content":False,
+                "monthly_cost": monthly_cost
+            }
 
         content = f'''### 5️⃣ Cost Analysis
 <details>
@@ -586,7 +608,11 @@ class GitPr(PlatformReporter):
     
 </details>
         '''
-        return content
+
+        return {
+            "content":content,
+            "monthly_cost": monthly_cost
+        }
 
     def _ci_links(self):
         """
@@ -622,38 +648,44 @@ class GitPr(PlatformReporter):
         is a markdown formatted string with Terraform process details, TFSec output,
         Infracost output, and CI details. The latter is the md5sum of the comment body.
         """
-        content = self._get_tf_md(ref_id=ref_id)
+        _tf_md_info = self._get_tf_md(ref_id=ref_id)
+        content = _tf_md_info["content"]
+        plan_summary = _tf_md_info["plan_summary"]
 
         try:
-            tf_sec_content = self._get_tfsec_md(ref_id=ref_id)
+            tf_sec_info = self._get_tfsec_md(ref_id=ref_id)
+            tf_sec_content = tf_sec_info["content"]
+            tfsec_severity = tf_sec_info["tfsec_severity"]
         except Exception as e:
             self.logger.debug(f"Failed to get TFSec content: {str(e)}")
             tf_sec_content = None
-
-        try:
-            infracost_content = self._get_infracost_md(ref_id=ref_id)
-        except Exception as e:
-            self.logger.debug(f"Failed to get Infracost content: {str(e)}")
-            infracost_content = None
-
-        ci_link_content = self._ci_links()
+            tfsec_severity = None
 
         if tf_sec_content:
             content = content + "\n" + tf_sec_content
 
+        try:
+            infracost_info = self._get_infracost_md(ref_id=ref_id)
+            infracost_content = infracost_info["content"]
+            monthly_cost = infracost_info["monthly_cost"]
+        except Exception as e:
+            self.logger.debug(f"Failed to get Infracost content: {str(e)}")
+            infracost_content = None
+            monthly_cost = None
+
         if infracost_content:
             content = content + "\n" + infracost_content
 
-        if ci_link_content:
-            content = content + ci_link_content
-
-        # Combine the table with tags for the comment body
-        comment_body = f'{content}\n\n#{self.search_tag}'
-        md5sum_str = get_hash_from_string(comment_body)
+        if not self.report:
+            ci_link_content = self._ci_links()
+            if ci_link_content:
+                content = content + ci_link_content
 
         return {
-            "comment_body": comment_body,
-            "md5sum": md5sum_str
+            "content": content,
+            "plan_summary": plan_summary,
+            "monthly_cost": monthly_cost if monthly_cost else "N/A",
+            "tfsec_severity": tfsec_severity if tfsec_severity else "N/A"
         }
 
     def _get_pr_id(self):
@@ -743,7 +775,16 @@ class GitPr(PlatformReporter):
         :return: A dictionary with the comment ID and its URL if the comment was
         added successfully, or False if the add failed.
         """
-        pr_md_info = self._get_pr_md(ref_id=ref_id)
+        content = self._get_pr_md(ref_id=ref_id)["content"]
+
+        # Combine the table with tags for the comment body
+        comment_body = f'{content}\n\n#{self.search_tag}'
+        md5sum_str = get_hash_from_string(comment_body)
+
+        pr_md_info = {
+            "comment_body": comment_body,
+            "md5sum": md5sum_str
+        }
 
         if not self.run_info.get("destroy"):
             existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
@@ -891,7 +932,7 @@ class GitPr(PlatformReporter):
     def _get_pr_md_parallel_runs(self, runs_summary):
         """
         Generate a markdown table summarizing multiple runs with enhanced plan details
-        and a collapsible appendix with all S3 file locations.
+        and a collapsible with all S3 file locations.
 
         :param runs_summary: List of dictionaries containing summary information for each run
         :return: Dictionary with comment_body and md5sum
@@ -903,8 +944,7 @@ class GitPr(PlatformReporter):
         table = "| Folder | Drift Check | Security | Cost |\n"
         table += "|--------|------------|----------|------|\n"
 
-        # Initialize the collapsible appendix section for S3 file locations
-        appendix = "\n<details>\n<summary>📁 S3 File Locations (Click to expand)</summary>\n\n"
+        comment_folders = {}
 
         # Process each run and add to the table
         for run in runs_summary:
@@ -912,36 +952,41 @@ class GitPr(PlatformReporter):
             folder = run.get("iac_ci_folder", "N/A")
             folder_anchor = folder.replace("/", "-").replace(" ", "-").lower()
 
-            # Get terraform plan data and analyze
-            tf_plan_data = self._get_tfplan(ref_id=run_id)
-            plan_summary = extract_plan_summary(tf_plan_data) if tf_plan_data else None
-
-            # Get tfsec data and analyze
-            tfsec_data = self._get_tfsec(ref_id=run_id)
-            tfsec_severity = self._analyze_tfsec_for_summary(tfsec_data)
-
-            # Get infracost data
-            infracost_data = self._get_infracost(ref_id=run_id, filetype="json")
-            monthly_cost = extract_infracost_monthly(infracost_data) if infracost_data else "N/A"
+            # testtest456
+            pr_md_results = self._get_pr_md(run_id)
+            content_folder = pr_md_results["content"]
+            plan_summary = pr_md_results["plan_summary"]
+            tfsec_severity = pr_md_results["tfsec_severity"]
+            monthly_cost = pr_md_results["monthly_cost"]
 
             # Generate S3 links
             tf_plan_link = self._get_s3_link_url(run_id, folder, "tfplan")
             tfsec_link = self._get_s3_link_url(run_id, folder, "tfsec")
             infracost_link = self._get_s3_link_url(run_id, folder, "infracost")
 
-            # Create anchor links to the appropriate sections in the appendix
-            tf_plan_anchor = f"#{folder_anchor}-plan"
-            tfsec_anchor = f"#{folder_anchor}-security"
-            infracost_anchor = f"#{folder_anchor}-cost"
+            # Add these links to the content_folder
+            content_folder += f"\n\n**S3 Links:**\n- Terraform Plan: `{tf_plan_link}`\n- Security Report: `{tfsec_link}`\n- Cost Report: `{infracost_link}`"
 
-            # Format the terraform plan cell with drift indicators and anchor link
+            # Update the comment with the added S3 links
+            comment_body_folder = f'{content_folder}\n\n#{self.base_report_tag} {folder}'
+            comment_info_folder = self.github_repo.add_pr_comment(comment_body_folder)
+
+            if not comment_info_folder.get("status"):
+                self.logger.debug(f"Failed to add comment for folder report {folder}.")
+            else:
+                comment_id = comment_info_folder["comment_id"]
+                url = comment_info_folder["url"]
+                comment_folders[folder] = url
+                self.logger.debug(f"Adding new comment comment_id {comment_id} for folder report {folder}.")
+
+            # Format the terraform plan cell with drift indicators
             if plan_summary:
                 add_count = int(plan_summary.get('add', '0'))
                 change_count = int(plan_summary.get('change', '0'))
                 destroy_count = int(plan_summary.get('destroy', '0'))
 
                 if add_count == 0 and change_count == 0 and destroy_count == 0:
-                    tf_plan_cell = f"✅ No Drift [link]({tf_plan_anchor})"
+                    tf_plan_cell = "✅ No Drift"
                 else:
                     # Show counts with color-coded indicators (red X for drift)
                     changes = []
@@ -952,45 +997,33 @@ class GitPr(PlatformReporter):
                     if destroy_count > 0:
                         changes.append(f"❌/🔴-{destroy_count}")
 
-                    tf_plan_cell = f"{' '.join(changes)} [link]({tf_plan_anchor})"
+                    tf_plan_cell = f"{' '.join(changes)}"
             else:
-                tf_plan_cell = f"❓ Unknown [link]({tf_plan_anchor})"
+                tf_plan_cell = "❓ Unknown"
 
-            # Format the tfsec cell with icon based on severity and anchor link
+            # Format the tfsec cell with icon based on severity
             if tfsec_severity == "success":
-                tfsec_cell = f"✅ [link]({tfsec_anchor})"
+                tfsec_cell = "✅"
             elif tfsec_severity == "high":
-                tfsec_cell = f"❌ [link]({tfsec_anchor})"
+                tfsec_cell = "❌"
             elif tfsec_severity == "medium":
-                tfsec_cell = f"⚠️ [link]({tfsec_anchor})"
+                tfsec_cell = "⚠️"
             elif tfsec_severity == "low":
-                tfsec_cell = f"ℹ️ [link]({tfsec_anchor})"
+                tfsec_cell = "ℹ️"
             else:
-                tfsec_cell = f"❓ [link]({tfsec_anchor})"
+                tfsec_cell = "❓"
 
-            # Format the infracost cell with anchor link
-            infracost_cell = f"{monthly_cost} [link]({infracost_anchor})"
+            # Format the infracost cell
+            infracost_cell = monthly_cost
 
-            # Add row to the table
-            table += f"| `{folder}` | {tf_plan_cell} | {tfsec_cell} | {infracost_cell} |\n"
-
-            # Add this folder's S3 file locations to the appendix
-            appendix += f"### {folder} <a name=\"{folder_anchor}\"></a>\n"
-            appendix += f"- **Drift Check** <a name=\"{folder_anchor}-plan\"></a>: `{tf_plan_link}`\n"
-            appendix += f"- **Security** <a name=\"{folder_anchor}-security\"></a>: `{tfsec_link}`\n"
-            appendix += f"- **Cost** <a name=\"{folder_anchor}-cost\"></a>: `{infracost_link}`\n\n"
+            # Add row to the table with link to the folder's comment
+            table += f"| [`{folder}`]({url}) | {tf_plan_cell} | {tfsec_cell} | {infracost_cell} |\n"
 
         # Add the table to the content
         content += table
 
         # Add legend for quick reference
         content += "\n**Legend:** ❌ Drift Detected | 🟣 Add | 🟠 Change | 🔴 Delete | ✅ No Drift/Issues | ❌ Critical/High | ⚠️ Medium | ℹ️ Low\n"
-
-        # Close the appendix section
-        appendix += "</details>\n"
-
-        # Add the appendix to the content
-        content += appendix
 
         # Add CI details if available
         ci_link_content = self._ci_links()
@@ -1005,7 +1038,7 @@ class GitPr(PlatformReporter):
             "comment_body": comment_body,
             "md5sum": md5sum_str
         }
-    
+
     def _clear_report_all_comments(self):
 
         if not hasattr(self, "github_repo") or not self.github_repo:
@@ -1046,11 +1079,11 @@ class GitPr(PlatformReporter):
         self.logger.json(run_ids)
         self.logger.debug("#" * 32)
 
-        runs_summary = self._get_parallel_runs_summary(run_ids)
-        pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
-
         self._clear_report_all_comments()
         self._clean_all_pr_comments()
+
+        runs_summary = self._get_parallel_runs_summary(run_ids)
+        pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
 
         existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
         comment_info = self._upsert_comment(pr_md_info, existing_comments, overwrite=True)

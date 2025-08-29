@@ -567,7 +567,9 @@ class GitHubRepo:
             self.logger.debug(f"Comment added successfully with ID: {comment_id}.")
             
             url = f'https://github.com/{self.owner}/{self.repo_name}/pull/{self.pr_number}#issuecomment-{comment_id}'
+
             return {
+                "id": comment_id,
                 "comment_id": comment_id,
                 "comment": decoded_comment,
                 "url": url,
@@ -576,6 +578,7 @@ class GitHubRepo:
             }
 
         self.logger.debug(f"Failed to add comment: {response.status_code}, {response.text}")
+
         return {"status": False}
     
     def is_pr_approved(self):
