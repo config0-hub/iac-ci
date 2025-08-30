@@ -177,13 +177,17 @@ class CloneCheckOutCode:
                     with open(config_file, 'r') as file:
                         config_data = yaml.safe_load(file)
 
-                    # Extract destroy and apply values, defaulting to False if not present
-                    destroy_value = config_data.get('destroy', False)
-                    apply_value = config_data.get('apply', False)
+                    if config_data:
+                        # Extract destroy and apply values, defaulting to False if not present
+                        destroy_value = config_data.get('destroy', False)
+                        apply_value = config_data.get('apply', False)
 
-                    # Only consider True if explicitly set to True
-                    destroy_value = True if destroy_value is True else False
-                    apply_value = True if apply_value is True else False
+                        # Only consider True if explicitly set to True
+                        destroy_value = True if destroy_value is True else False
+                        apply_value = True if apply_value is True else False
+                    else:
+                        destroy_value = None
+                        apply_value = None
 
                     # Store the results
                     # Use relative path from basedir for cleaner output

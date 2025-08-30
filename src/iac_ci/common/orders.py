@@ -108,6 +108,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Notification.__init__(self)
         CreateTempParamStoreEntry.__init__(self)
 
+        self._set_error_search_tag()
         self.results = {
             "msg": None,
             "step_func": self.step_func,
@@ -260,7 +261,17 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if not hasattr(self, "github_repo") or not self.github_repo:
             return False
 
-        comments = self.github_repo.get_pr_comments(search_tag=search_tag)
+        search_tag_comments = self.github_repo.get_pr_comments(search_tag=search_tag)
+
+        if search_tag_comments:
+            comments = search_tag_comments
+        else:
+            comments = []
+
+        error_comments = self.github_repo.get_pr_comments(search_tag=self.error_tag)
+
+        if error_comments:
+            comments.extend(error_comments)
 
         if not comments:
             return
@@ -353,6 +364,47 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             self.logger.error(f"Failed to retrieve GitHub token: {github_token_info['failed_message']}")
 
         return self.github_token
+
+    def setup_github(self,reset=True):
+        """
+        Sets up the GitHub repository configuration.
+    
+        This method initializes the GitHub token for authentication and creates
+        an instance of the GitHubRepo class using information from the webhook.
+        It extracts the repository name, pull request number, and owner from
+        the webhook information to configure the GitHub repository settings.
+    
+        Raises:
+            Exception: If the GitHub token cannot be set or if the webhook
+            information is incomplete.
+        """
+
+        self.set_github_token()
+
+        if self.github_repo and not reset:
+            return self.github_repo
+
+        self.github_repo = GitHubRepo(
+            repo_name=self.webhook_info["repo_name"],
+            pr_number=self.webhook_info["pr_number"],
+            token=self.github_token,
+            owner=self.webhook_info["owner"]
+        )
+
+    def _set_error_search_tag(self):
+
+        try:
+            self.error_tag = f"iac-ci:::tag::error:status repo_name: `{self.webhook_info['repo_name']}`, pr_number: `{self.webhook_info['pr_number']}`"
+        except:
+            self.error_tag = f"iac-ci:::tag::error:status"
+
+        return self.error_tag
+
+    def add_error_comment_to_pr(self,failed_message):
+        self._set_error_search_tag()
+        content = f'{failed_message}\n\n#{self.error_tag}'
+        self.setup_github()
+        self.github_repo.add_pr_comment(content)
 
     def set_search_tag(self):
         """
@@ -673,7 +725,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if self.report:
             self.stateful_id = self.run_id
         else:
-            self.stateful_id = self.iac_ci_info["stateful_id"]
+            self.stateful_id = self.webhook_info["commit_hash"]
 
         self.run_share_dir = f'/var/tmp/share/{self.stateful_id}'
 
@@ -1609,12 +1661,15 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         self.s3_output_folder = id_generator2()
 
+        # ref 436365256
         if self.report:
             self.logger.debug("Overwriting build_env_vars for report/parallel folders")
             self.build_env_vars["RUN_ID"] = self.run_id
             self.build_env_vars["STATEFUL_ID"] = self.run_id
-            self.build_env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
+        else:
+            self.build_env_vars["STATEFUL_ID"] = self.webhook_info["commit_hash"]
 
+        self.build_env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.build_env_vars["STATEFUL_ID"]}'
         self.logger.json(self.build_env_vars)
         self.logger.debug("#" * 32)
 

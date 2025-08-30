@@ -277,6 +277,8 @@ class GitPr(PlatformReporter):
         if kwargs.get("failure_s3_key"):
             self.failure_s3_key = kwargs["failure_s3_key"]
 
+        self._set_error_search_tag()
+
     def _analyze_tfplan_for_summary(self, plan_output):
         """
         Analyze terraform plan output to determine if there are changes.
@@ -499,7 +501,10 @@ class GitPr(PlatformReporter):
         :param ref_id: Optional reference ID to use for retrieving artifacts
         :return: A markdown formatted string with Terraform process details.
         """
-        content = "## 🏗️ Terraform\n\n"
+        if self.report:
+            content = ""
+        else:
+            content = "## 🏗️ Terraform\n\n"
 
         # Get section contents
         if self.report:
@@ -833,7 +838,12 @@ class GitPr(PlatformReporter):
         self.commit_hash = self.run_info["commit_hash"]
         self.repo_name = self.trigger_info.get("repo_name")
         self.remote_stateful_bucket = self.trigger_info["remote_stateful_bucket"]
-        self.stateful_id = self.iac_ci_info["stateful_id"]
+
+        if self.report:
+            self.stateful_id = self.run_info["run_id"]
+        else:
+            self.stateful_id = self.webhook_info["commit_hash"]
+
         self.tmp_bucket = self.trigger_info["s3_bucket_tmp"]
         self.pr_number = self.webhook_info["pr_number"]
         self.branch = self.webhook_info["branch"]
@@ -950,9 +960,7 @@ class GitPr(PlatformReporter):
         for run in runs_summary:
             run_id = run["run_id"]
             folder = run.get("iac_ci_folder", "N/A")
-            folder_anchor = folder.replace("/", "-").replace(" ", "-").lower()
 
-            # testtest456
             pr_md_results = self._get_pr_md(run_id)
             content_folder = pr_md_results["content"]
             plan_summary = pr_md_results["plan_summary"]
@@ -964,11 +972,21 @@ class GitPr(PlatformReporter):
             tfsec_link = self._get_s3_link_url(run_id, folder, "tfsec")
             infracost_link = self._get_s3_link_url(run_id, folder, "infracost")
 
-            # Add these links to the content_folder
-            content_folder += f"\n\n**S3 Links:**\n- Terraform Plan: `{tf_plan_link}`\n- Security Report: `{tfsec_link}`\n- Cost Report: `{infracost_link}`"
+            # Make S3 links collapsible
+            s3_links_section = "\n\n<details>\n<summary>S3 Links</summary>\n\n"
+            s3_links_section += f"- Terraform Plan: `{tf_plan_link}`\n"
+            s3_links_section += f"- Security Report: `{tfsec_link}`\n"
+            s3_links_section += f"- Cost Report: `{infracost_link}`\n"
+            s3_links_section += "</details>"
 
-            # Update the comment with the added S3 links
-            comment_body_folder = f'{content_folder}\n\n#{self.base_report_tag} {folder}'
+            folder_title = f'## 🏗️ Report - "{folder}"\n\n'
+            comment_body_folder = f'{folder_title}{content_folder}{s3_links_section}\n\n#{self.base_report_tag} {folder}'
+
+            # Make the entire folder report collapsible with highlighted folder name
+            #folder_title = f"## 🏗️ Report {folder}\n\n"
+            #collapsible_content = f"{folder_title}<details>\n<summary></summary>\n\n{content_folder}{s3_links_section}\n</details>"
+            #comment_body_folder = f'{collapsible_content}\n\n#{self.base_report_tag} {folder}'
+
             comment_info_folder = self.github_repo.add_pr_comment(comment_body_folder)
 
             if not comment_info_folder.get("status"):

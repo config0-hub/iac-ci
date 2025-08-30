@@ -29,7 +29,6 @@ from iac_ci.common.orders import new_run_id
 from iac_ci.common.orders import PlatformReporter
 from iac_ci.common.serialization import b64_encode
 from iac_ci.common.loggerly import IaCLogger
-from iac_ci.common.github_pr import GitHubRepo
 from iac_ci.common.gitclone import CloneCheckOutCode
 from iac_ci.common.serialization import b64_decode
 
@@ -62,6 +61,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         self.phase = "load_webhook"
         self.expire_at = int(os.environ.get("BUILD_TTL", "3600"))
         self.init_failure = None
+        self.issue_comment = None
 
         try:
             self.basic_events = b64_decode(os.environ['BASIC_EVENTS_B64'])
@@ -141,25 +141,9 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.fetch_code()
         except:
             failed_message = traceback.format_exc()
+            self.logger.debug(failed_message)
 
         return self.find_and_process_config_files(config_path=".iac_ci/config.yaml")
-
-    # deprecating
-    def clone_and_get_yaml(self):
-
-        try:
-            self.write_private_key()
-            self.fetch_code()
-        except:
-            failed_message = traceback.format_exc()
-            return {"failed_message": failed_message}
-
-        contents = self.get_repo_file(".iac_ci/config.yaml")
-
-        if contents:
-            return contents["iac_ci_folders"]
-
-        return contents
 
     def get_stepf_arn(self):
         """
@@ -199,34 +183,8 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         }
 
     def _get_changed_dirs(self):
-        self._setup_github()
+        self.setup_github()
         return self.github_repo.get_changed_dirs()
-
-    def _setup_github(self,reset=True):
-        """
-        Sets up the GitHub repository configuration.
-    
-        This method initializes the GitHub token for authentication and creates
-        an instance of the GitHubRepo class using information from the webhook.
-        It extracts the repository name, pull request number, and owner from
-        the webhook information to configure the GitHub repository settings.
-    
-        Raises:
-            Exception: If the GitHub token cannot be set or if the webhook
-            information is incomplete.
-        """
-
-        self.set_github_token()
-
-        if self.github_repo and not reset:
-            return self.github_repo
-
-        self.github_repo = GitHubRepo(
-            repo_name=self.webhook_info["repo_name"],
-            pr_number=self.webhook_info["pr_number"],
-            token=self.github_token,
-            owner=self.webhook_info["owner"]
-        )
 
     def _eval_issue(self):
         """
@@ -240,7 +198,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         if self.webhook_info["event_type"] != "issue_comment":
             return
 
-        self._setup_github()
+        self.setup_github()
         pr_details = self.github_repo.issue_to_pr()
 
         if not pr_details:
@@ -289,8 +247,10 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         if event_type == "ping":
             return "event is ping - nothing done"
 
-        if self.webhook_info.get("event_type") == "issue_comment" and self.webhook_info.get("action") != "created":
-            return 'issue_comment needs to have action == "created"'
+        if self.webhook_info.get("event_type") == "issue_comment":
+            if self.webhook_info.get("action") != "created":
+                return 'issue_comment needs to have action == "created"'
+            self.issue_comment = True
 
         if event_type in self.basic_events:
             return True
@@ -697,9 +657,11 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             if action != comment_params[0]:
                 continue
 
-            if comment_params[0] in ["plan", "validate", "drift", "report"]:
+            # these are checks
+            if comment_params[0] in ["check", "plan", "validate", "drift", "report"]:
                 db_key = "check_str"
                 action_chk = "check"
+            # these are more invasive: e.g. apply, destroy
             else:
                 db_key = f"{action}_str"
                 action_chk = action
@@ -855,7 +817,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         if not self.results.get("console_url"):
             return
 
-        self._setup_github()
+        self.setup_github()
 
         expire_epoch = str(int(time()) + 3600)
 
@@ -887,20 +849,10 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     def _get_iac_ci_folder(self):
 
         # check directories
-        changed_dirs = self._get_changed_dirs()
-        iac_ci_folders_configs = self.clone_and_get_iac_folders_configs()
+        changed_dirs = [ changed_dir for changed_dir in self._get_changed_dirs() if ".iac_ci" in changed_dir ]
 
-        self.logger.debug(f"iac_ci_folders_configs: {iac_ci_folders_configs}")
-        self.logger.debug(f"changed_dirs: {changed_dirs}")
-
-        match_folders = []
-
-        for iac_ci_folder in iac_ci_folders_configs:
-            if iac_ci_folder in changed_dirs:
-                match_folders.append(iac_ci_folder)
-
-        if len(match_folders) != 1:
-            failed_message = f"should only find one matched folder - found instead {match_folders} in the same PR"
+        if len(changed_dirs) != 1:
+            failed_message = f"should only find one matched folder - found instead {changed_dirs} in the same PR"
             return {
                 "failed_message":failed_message,
                 "status":False
@@ -913,15 +865,13 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         except IndexError:
             iac_ci_folder_db = None
 
-        iac_ci_folder = match_folders[0]
+        iac_ci_folder = changed_dirs[0].split("/.iac_ci")[0]
 
         if iac_ci_folder_db and iac_ci_folder_db != iac_ci_folder:
             failed_message = f"iac_ci_folder in db: {iac_ci_folder_db} not same as iac_ci_folder: {iac_ci_folder}"
             self.logger.warn(failed_message)
-            return {
-                "failed_message": failed_message,
-                "status": False
-            }
+
+        iac_ci_folders_configs = self.clone_and_get_iac_folders_configs()
 
         # Extract destroy and apply values from the inner dictionary
         config_values = iac_ci_folders_configs[iac_ci_folder]
@@ -956,84 +906,6 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             "iac_ci_folder": iac_ci_folder,
             "destroy": destroy_value,
             "apply": apply_value,
-            "status": True
-        }
-
-    # deprecating
-    def _get_iac_ci_folder_2(self):
-
-        # check directories
-        changed_dirs = self._get_changed_dirs()
-
-        # explicit on dynamodb
-        iac_ci_folder = self.iac_ci_info.get("iac_ci_folder")
-
-        if iac_ci_folder:
-            return {
-                "iac_ci_folder": iac_ci_folder,
-                "status": True
-            }
-
-        pr_id = self._pr_id()
-
-        try:
-            iac_ci_folder = self.db.table_runs.search_key(key="_id", value=pr_id)["Items"][0]["iac_ci_folder"]
-        except IndexError:
-            iac_ci_folder = None
-
-        if iac_ci_folder:
-            return {
-                "iac_ci_folder": iac_ci_folder,
-                "status": True
-            }
-
-        iac_ci_folders = self.clone_and_get_yaml()
-
-        if not iac_ci_folders:
-            return {
-                "failed_message": "no yaml provided at .iac_ci/config.yaml",
-                "status": False
-            }
-
-        match_folders = []
-
-        for iac_ci_folder in iac_ci_folders:
-            if iac_ci_folder in changed_dirs:
-                match_folders.append(iac_ci_folder)
-
-        if len(match_folders) != 1:
-            failed_message = f"should only find one matched folder - found instead {match_folders} in the same PR"
-            return {
-                "failed_message":failed_message,
-                "status":False
-            }
-
-        iac_ci_folder = match_folders[0]
-
-        # if it got this far, then it is probably
-        # the first time it is registered the pr_id
-        values = {
-            "_id": pr_id,
-            "pr_id": pr_id,
-            "iac_ci_folder": iac_ci_folder,
-            "repo_name": self.webhook_info['repo_name'],
-            "repo_owner": self.webhook_info['owner'],
-            "pr_number": self.webhook_info['pr_number'],
-            "checkin": int(time()),  # Removed the extra "="
-            "expire_at": int(time()) + 604800,  # 7 days (604800 seconds) from now
-            "iac_ci_id": self.iac_ci_id
-        }
-
-        if self.webhook_info.get("branch"):
-            values["branch"] = self.webhook_info["branch"]
-
-        self.logger.debug(f'registering pr_number: "{self.webhook_info["pr_number"]}", iac_ci_folder: "{iac_ci_folder}"')
-        self.db.table_runs.insert(values)
-
-        self.logger.debug(f"iac_ci_folder: {iac_ci_folder}")
-
-        return {
-            "iac_ci_folder": iac_ci_folder,
             "status": True
         }
 
@@ -1098,6 +970,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         self.results["continue"] = False
         self.results["status"] = None
 
+    def _add_error_comment_to_pr(self,failed_message):
+        try:
+            if not self.issue_comment:
+                return
+            self.add_error_comment_to_pr(f'⛔ {failed_message}')
+            return True
+        except:
+            return False
+
     def execute(self, **kwargs):
         """
         Execute the webhook processing logic.
@@ -1138,8 +1019,9 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                     "failed_message": failed_message
                 }
             else:
-                msg = f'{self.valid_actions} str not found in event_type "issue_comment"'
+                msg = f'`{self.valid_actions} str` not found in event_type "issue_comment"'
 
+            self._add_error_comment_to_pr(msg)
             self._update_false()
             self.results["status"] = "failed"
             self.results["msg"] = msg
@@ -1150,14 +1032,17 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         action = action_info.get("action")
 
         if not action:
+            msg = "`action` cannot be evaluated"
+            self._add_error_comment_to_pr(msg)
             self._update_false()
             self.results["status"] = "failed"
-            self.results["msg"] = "action cannot be evaluated"
+            self.results["msg"] = msg
             self.add_log(self.results["msg"])
             return False
 
         if self.webhook_info.get("status") is False:
             msg = self.webhook_info["msg"]
+            self._add_error_comment_to_pr(msg)
             self._update_false()
             self.results["status"] = "failed"
             self.results["msg"] = msg
@@ -1170,11 +1055,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             iac_ci_folder_configs = self._exec_iac_ci_folder()
 
         if not iac_ci_folder_configs:
+            msg = "`iac_ci_folder_configs` cannot be evaluated"
+            self._add_error_comment_to_pr(msg)
             self._update_false()
             return False
 
         if not self.report_folders and (action in ["destroy","apply"] and not iac_ci_folder_configs.get(action)):
-            self.logger.error(f'iac_ci_folder {iac_ci_folder_configs["iac_ci_folder"]} action "{action}" set to "{iac_ci_folder_configs[action]}" not allowed')
+            failed_message = f'Not Allowed @ `.iac_ci/config.yaml`: **iac_ci_folder=`{iac_ci_folder_configs["iac_ci_folder"]}` | action=`{action}`**'
+            self.logger.debug(failed_message)
+            self._add_error_comment_to_pr(failed_message)
             self._update_false()
             self.results["status"] = "failed"
             return False
@@ -1221,6 +1110,8 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         _save_run_info = self._save_run_info()
 
         if _save_run_info.get("status") is False:
+            msg = "could not `save run_info` to db"
+            self._add_error_comment_to_pr(msg)
             self._update_false()
             self.results["status"] = "failed"
             self.results["update"] = True

@@ -106,10 +106,14 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         except (IOError, UnicodeDecodeError) as e:
             self.logger.debug(f"Error processing build environment variables file: {e}")
 
+        # ref 436365256
         if self.report:
             env_vars["RUN_ID"] = self.run_id
             env_vars["STATEFUL_ID"] = self.run_id
-            env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{self.run_id}'
+        else:
+            env_vars["STATEFUL_ID"] = self.webhook_info["commit_hash"]
+
+        env_vars["RUN_SHARE_DIR"] = f'/var/tmp/share/{env_vars["STATEFUL_ID"]}'
 
         if os.environ.get('DEBUG_IAC_CI'):
             self.logger.debug("#"*32)
@@ -226,6 +230,7 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         }
 
         if failed_message:
+            self.add_error_comment_to_pr(failed_message)
             failure_s3_key = id_generator()
             failed_file = os.path.join("/tmp", failure_s3_key)
             with open(failed_file, 'w') as _file:
