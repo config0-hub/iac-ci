@@ -99,43 +99,16 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
 
   definition = <<EOF
 {
-  "Comment": "The state machine processes webhook from code repo, executes codebuild, and checks results",
+  "Comment": "Processes webhook, executes CodeBuild, supports optional parallel folder builds when report && parallel_folder_builds. No parsing of $.body.",
   "StartAt": "ProcessWebhook",
   "States": {
-    "CheckCodebuild": {
-      "InputPath": "$.body",
-      "Next": "ChkCheckCodebuild",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-check-codebuild",
-      "Type": "Task"
-    },
-    "ChkCheckCodebuild": {
-      "Choices": [
-        {
-          "BooleanEquals": true,
-          "Next": "CheckCodebuild",
-          "Variable": "$.continue"
-        }
-      ],
-      "Default": "Done",
-      "Type": "Choice"
-    },
-    "ChkPkgCodeToS3": {
-      "Choices": [
-        {
-          "IsPresent": true,
-          "Next": "EvaluatePr",
-          "Variable": "$.failure_s3_key"
-        },
-        {
-          "BooleanEquals": true,
-          "Next": "TriggerLambda",
-          "Variable": "$.continue"
-        }
-      ],
-      "Default": "Done",
-      "Type": "Choice"
+    "ProcessWebhook": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-process-webhook",
+      "Next": "ChkProcessWebhook"
     },
     "ChkProcessWebhook": {
+      "Type": "Choice",
       "Choices": [
         {
           "And": [
@@ -167,6 +140,23 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
           "And": [
             {
               "BooleanEquals": true,
+              "Variable": "$.continue"
+            },
+            {
+              "BooleanEquals": true,
+              "Variable": "$.report"
+            },
+            {
+              "IsPresent": true,
+              "Variable": "$.parallel_folder_builds"
+            }
+          ],
+          "Next": "PrepareParallelBody"
+        },
+        {
+          "And": [
+            {
+              "BooleanEquals": true,
               "Variable": "$.check"
             },
             {
@@ -177,69 +167,159 @@ resource "aws_sfn_state_machine" "sfn_state_machine" {
           "Next": "PkgCodeToS3"
         }
       ],
-      "Default": "Done",
-      "Type": "Choice"
+      "Default": "Done"
     },
-    "ChkTriggerCodebuild": {
-      "Choices": [
-        {
-          "BooleanEquals": true,
-          "Next": "WaitCodebuildCheck",
-          "Variable": "$.continue"
+    "PrepareParallelBody": {
+      "Type": "Pass",
+      "Parameters": {
+        "parallelArray.$": "$.parallel_folder_builds",
+        "original_body.$": "$.body"
+      },
+      "Next": "ParallelPkgCodeToS3"
+    },
+    "ParallelPkgCodeToS3": {
+      "Type": "Map",
+      "ItemsPath": "$.parallelArray",
+      "ResultPath": "$.parallelResults",
+      "MaxConcurrency": 0,
+      "Parameters": {
+        "iac_ci_folder.$": "$$.Map.Item.Value",
+        "report": true,
+        "body.$": "$.original_body",
+        "_id.$": "$$.Map.Item.Value"
+      },
+      "Iterator": {
+        "StartAt": "ChildPkgCodeToS3",
+        "States": {
+          "ChildPkgCodeToS3": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-pkgcode-to-s3",
+            "Next": "ChildChkPkgCodeToS3"
+          },
+          "ChildChkPkgCodeToS3": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "IsPresent": true,
+                "Variable": "$.failure_s3_key",
+                "Next": "Done_Child"
+              },
+              {
+                "BooleanEquals": true,
+                "Variable": "$.continue",
+                "Next": "ChildTriggerLambda"
+              }
+            ],
+            "Default": "Done_Child"
+          },
+          "ChildTriggerLambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-lambda",
+            "Next": "Done_Child"
+          },
+          "Done_Child": {
+            "Type": "Pass",
+            "End": true
+          }
         }
-      ],
-      "Default": "Done",
-      "Type": "Choice"
+      },
+      "Next": "EvaluatePrParent"
     },
-    "ChkTriggerLambda": {
-      "Choices": [
-        {
-          "BooleanEquals": true,
-          "Next": "EvaluatePr",
-          "Variable": "$.continue"
-        }
-      ],
-      "Default": "Done",
-      "Type": "Choice"
-    },
-    "Done": {
-      "End": true,
-      "Type": "Pass"
-    },
-    "EvaluatePr": {
-      "End": true,
-      "InputPath": "$.body",
+    "EvaluatePrParent": {
+      "Type": "Task",
+      "Comment": "Send final PR update using original string body; set continue=true inside your Lambda if needed.",
+      "InputPath": "$.original_body",
       "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-update-pr",
-      "Type": "Task"
+      "End": true
     },
     "PkgCodeToS3": {
+      "Type": "Task",
       "InputPath": "$.body",
-      "Next": "ChkPkgCodeToS3",
       "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-pkgcode-to-s3",
-      "Type": "Task"
+      "Next": "ChkPkgCodeToS3"
     },
-    "ProcessWebhook": {
-      "Next": "ChkProcessWebhook",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-process-webhook",
-      "Type": "Task"
-    },
-    "TriggerCodebuild": {
-      "InputPath": "$.body",
-      "Next": "ChkTriggerCodebuild",
-      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-codebuild",
-      "Type": "Task"
+    "ChkPkgCodeToS3": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "IsPresent": true,
+          "Variable": "$.failure_s3_key",
+          "Next": "EvaluatePr"
+        },
+        {
+          "BooleanEquals": true,
+          "Variable": "$.continue",
+          "Next": "TriggerLambda"
+        }
+      ],
+      "Default": "Done"
     },
     "TriggerLambda": {
+      "Type": "Task",
       "InputPath": "$.body",
-      "Next": "ChkTriggerLambda",
       "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-lambda",
-      "Type": "Task"
+      "Next": "ChkTriggerLambda"
+    },
+    "ChkTriggerLambda": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "BooleanEquals": true,
+          "Variable": "$.continue",
+          "Next": "EvaluatePr"
+        }
+      ],
+      "Default": "Done"
+    },
+    "EvaluatePr": {
+      "Type": "Task",
+      "InputPath": "$.body",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-update-pr",
+      "End": true
+    },
+    "TriggerCodebuild": {
+      "Type": "Task",
+      "InputPath": "$.body",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-trigger-codebuild",
+      "Next": "ChkTriggerCodebuild"
+    },
+    "ChkTriggerCodebuild": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "BooleanEquals": true,
+          "Variable": "$.continue",
+          "Next": "WaitCodebuildCheck"
+        }
+      ],
+      "Default": "Done"
     },
     "WaitCodebuildCheck": {
+      "Type": "Wait",
       "Comment": "Wait to Check CodeBuild completion",
-      "Next": "CheckCodebuild",
       "Seconds": 30,
-      "Type": "Wait"
+      "Next": "CheckCodebuild"
+    },
+    "CheckCodebuild": {
+      "Type": "Task",
+      "InputPath": "$.body",
+      "Resource": "arn:aws:lambda:${var.aws_default_region}:${data.aws_caller_identity.current.account_id}:function:iac-ci-check-codebuild",
+      "Next": "ChkCheckCodebuild"
+    },
+    "ChkCheckCodebuild": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "BooleanEquals": true,
+          "Variable": "$.continue",
+          "Next": "CheckCodebuild"
+        }
+      ],
+      "Default": "Done"
+    },
+    "Done": {
+      "Type": "Pass",
+      "End": true
     }
   }
 }

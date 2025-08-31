@@ -849,7 +849,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     def _get_iac_ci_folder(self):
 
         # check directories
-        changed_dirs = [ changed_dir for changed_dir in self._get_changed_dirs() if ".iac_ci" in changed_dir ]
+        changed_dirs = list(set([changed_dir.split("/.iac_ci")[0] if "/.iac_ci" in changed_dir else changed_dir for changed_dir in self._get_changed_dirs()]))
 
         if len(changed_dirs) != 1:
             failed_message = f"should only find one matched folder - found instead {changed_dirs} in the same PR"
@@ -865,7 +865,10 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         except IndexError:
             iac_ci_folder_db = None
 
-        iac_ci_folder = changed_dirs[0].split("/.iac_ci")[0]
+        if ".iac_ci" in changed_dirs[0]:
+            iac_ci_folder = changed_dirs[0].split("/.iac_ci")[0]
+        else:
+            iac_ci_folder = changed_dirs[0]
 
         if iac_ci_folder_db and iac_ci_folder_db != iac_ci_folder:
             failed_message = f"iac_ci_folder in db: {iac_ci_folder_db} not same as iac_ci_folder: {iac_ci_folder}"
