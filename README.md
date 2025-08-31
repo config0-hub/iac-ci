@@ -99,21 +99,34 @@ The core of iac-ci is an AWS Step Function that orchestrates the entire workflow
 
 ## Sample Screenshots
 
-Below are visual examples that demonstrate how different iac-ci operations appear in the AWS console. Click on any image to view it in full size:
+Below are visual examples that demonstrate how different iac-ci operations appear in the AWS console and PR comments. Click on any image to view it in full size:
 
-### Apply Operation
+### AWS Console Examples
+
+#### Apply Operation
 [![Apply Operation Example](images/sample-apply.png)](images/sample-apply.png)
 
-### Destroy Operation
+#### Destroy Operation
 [![Destroy Operation Example](images/sample-destroy.png)](images/sample-destroy.png)
 
-### Check Operation
+#### Check Operation
 [![Check Operation Example](images/sample-check-image.png)](images/sample-check-image.png)
 
-### Report All Operation
+#### Report All Operation
 [![Report All Operation Example](images/sample-report-all.png)](images/sample-report-all.png)
 
-These screenshots provide a concrete understanding of the execution flow and output format for each operation type, helping users become familiar with the system before using it.
+### PR Comment Examples
+
+#### Apply/Destroy Operation in PR
+[![Apply/Destroy PR Comment Example](images/sample-apply_or_destroy-tf-pr.png)](images/sample-apply_or_destroy-tf-pr.png)
+
+#### Check Operation in PR
+[![Check PR Comment Example](images/sample-check-tf-pr.png)](images/sample-check-tf-pr.png)
+
+#### Report All Operation in PR
+[![Report All PR Comment Example](images/sample-report-all-tf-pr.png)](images/sample-report-all-tf-pr.png)
+
+These screenshots provide a concrete understanding of the execution flow and output format for each operation type, helping users become familiar with the system before using it. The PR comment examples show how iac-ci provides summaries with links to CI pipelines, CodeBuild runs, and detailed reports directly in your pull requests.
 
 ## Folder-Based Workflow
 
