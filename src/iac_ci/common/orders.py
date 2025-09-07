@@ -853,13 +853,26 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         self._set_add_class_vars()
 
         if self.phase not in [ "pkgcode-to-s3" ]:
-            try:
-                self.build_env_vars = json.loads(base64.b64decode(self.run_info["build_env_vars_b64"]).decode('utf-8'))
-            except Exception as e:
-                self.logger.error(f"could not decode build_env_vars_b64: {str(e)}")
-                self.build_env_vars = {}
+            if self.run_info.get("build_env_vars_b64"):
+                try:
+                    self.build_env_vars = json.loads(base64.b64decode(self.run_info["build_env_vars_b64"]).decode('utf-8'))
+                except Exception as e:
+                    self.logger.error(f"could not decode build_env_vars_b64: {str(e)}")
+                    self.build_env_vars = {}
+            else:
+                try:
+                    self.build_env_vars = self._get_b64_data_frm_s3(self.remote_src_bucket, self.remote_build_env_vars_key)
+                except Exception as e:
+                    self.logger.error(f"could not get build_env_vars from s3: {str(e)}")
+                    self.build_env_vars = {}
         else:
             self.build_env_vars = {}
+
+        if os.environ.get("DEBUG_IAC_CI"):
+            self.logger.debug("#"*32)
+            self.logger.debug(f"# phase {self.phase}")
+            self.logger.json(self.build_env_vars)
+            self.logger.debug("#"*32)
 
         if os.environ.get("DEBUG_IAC_CI"):
             os.environ["DEBUG_IAC_CI"] = "True"
@@ -931,6 +944,32 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         return True
 
+    def _get_b64_data_frm_s3(self,s3_bucket,s3_key):
+
+        dstfile = os.path.join("/tmp", id_generator())
+
+        try:
+            self.s3_file.get(
+                s3_bucket=s3_bucket,
+                s3_key=s3_key,
+                dstfile=dstfile
+            )
+
+            _datab64 = open(dstfile, "r").read()
+            _decoded = b64_decode(_datab64)
+
+            try:
+                data = json.loads(_decoded)
+            except Exception:
+                data = _decoded
+        except Exception as e:
+            self.logger.error(f"could not get data from s3 {s3_bucket}/{s3_key}: {str(e)}")
+            return {}
+
+        rm_rf(dstfile)
+
+        return data
+
     def _get_data_frm_s3(self):
         """
         Retrieves data from S3.
@@ -943,26 +982,8 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         """
 
         self.logger.debug(f"getting data from s3: bucket: {self.tmp_bucket}, key: {self.s3_data_key}")
-
-        dstfile = os.path.join("/tmp", id_generator())
-
-        self.s3_file.get(
-            s3_bucket=self.tmp_bucket,
-            s3_key=self.s3_data_key,
-            dstfile=dstfile
-        )
-
-        _datab64 = open(dstfile, "r").read()
-        _decoded = b64_decode(_datab64)
-
-        try:
-            self.data = json.loads(_decoded)
-        except Exception:
-            self.data = _decoded
-
+        self.data = self._get_b64_data_frm_s3(self.tmp_bucket,self.s3_data_key)
         self.active = True
-
-        rm_rf(dstfile)
 
         return True
 

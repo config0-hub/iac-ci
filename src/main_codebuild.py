@@ -85,8 +85,16 @@ class TriggerCodebuild(PlatformReporter):
             print('wait_destroy needs to be greater than or equal to 120 seconds')
             cinputargs["wait_destroy"] = 120
 
+        if os.environ.get("DEBUG_IAC_CI"):
+            self.logger.debug('#'*32)
+            self.logger.json(self.build_env_vars)
+            self.logger.debug('#'*32)
+
+        cinputargs["wait_destroy"] = int(self.build_env_vars.get("IAC_CI_WAIT_DESTROY"))
+        cinputargs["wait_apply"] = int(self.build_env_vars.get("IAC_CI_WAIT_APPLY"))
+
         try:
-            cinputargs["wait_apply"] = int(self.build_env_vars.get("IAC_CI_WAIT_DESTROY"))
+            cinputargs["wait_apply"] = int(self.build_env_vars.get("IAC_CI_WAIT_APPLY"))
         except:
             cinputargs["wait_apply"] = 30
 

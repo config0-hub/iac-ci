@@ -249,14 +249,39 @@ class PkgCodeToS3(PlatformReporter, CloneCheckOutCode):
         # set the iac platform if explicitly provided in the build_enva_vars
         build_env_vars = self._get_build_env_vars_frm_file()
 
+        _build_env_vars = {
+                "IAC_PLATFORM": os.environ.get("IAC_PLATFORM", "iac-ci"),
+                "IAC_CI_ID": self.iac_ci_id,
+                "IAC_CI_REPO_NAME": self.repo_name,
+                "IAC_CI_TRIGGER_ID": self.trigger_id,
+                "IAC_CI_COMMIT_HASH": self.commit_hash,
+                "IAC_CI_WAIT_APPLY": "45",
+                "IAC_CI_WAIT_DESTROY": "120"
+            }
+
+        if not build_env_vars:
+            build_env_vars = _build_env_vars
+        else:
+            build_env_vars.update(_build_env_vars)
+
         if os.environ.get('DEBUG_IAC_CI'):
             self.logger.debug("*" * 32)
             self.logger.debug("* build_env_vars")
             self.logger.json(build_env_vars)
             self.logger.debug("*" * 32)
 
-        if build_env_vars:
-            self.run_info["build_env_vars_b64"] = b64_encode(build_env_vars)
+        self.run_info["build_env_vars_b64"] = b64_encode(build_env_vars)
+
+        srcfile = os.path.join("/tmp", id_generator())
+
+        with open(srcfile, 'w') as _file:
+            _file.write(self.run_info["build_env_vars_b64"])
+
+        self.s3_file.insert(
+            s3_bucket=self.remote_src_bucket,
+            s3_key=self.remote_build_env_vars_key,
+            srcfile=srcfile
+        )
 
         # successful at this point
         self.results["msg"] = f"code fetched repo_name {self.repo_name}, commit_hash {self.commit_hash} to {self.remote_src_bucket}/{self.remote_src_bucket_key}"

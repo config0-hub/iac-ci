@@ -117,7 +117,7 @@ class CheckBuild(PlatformReporter):
         build = self.codebuild_client.batch_get_builds(ids=[self.build_id])['builds'][0]
         build_status = build['buildStatus']
         codebuild_name = build['projectName']
-        print(f"codebuild_name {codebuild_name}/codebuild status {build_status}")
+        self.logger.debug(f"codebuild_name {codebuild_name}/codebuild status {build_status}")
 
         self.codebuild_log_bucket = build["logs"]["s3Logs"]["location"].split('/codebuild/logs')[0]
         self.logger.debug(f'codebuild s3 log bucket "{self.codebuild_log_bucket}"')
