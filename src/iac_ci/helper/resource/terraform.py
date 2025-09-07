@@ -20,8 +20,8 @@ This module provides utilities for executing Terraform commands in AWS environme
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#import shlex
 import os
-
 from iac_ci.common.serialization import b64_encode
 from iac_ci.s3_unzip_and_env_vars import SSMHelper
 from iac_ci.helper.resource.tfinstaller import get_tf_install
@@ -59,6 +59,8 @@ class TFCmdOnAWS(TFAppHelper):
         self.add_ssm_names = kwargs.get("add_ssm_names")
         self.ssm_tmp_dir = "/tmp"
         self.ssm_names_b64 = None
+        self.wait_destroy = kwargs.get("wait_destroy",120)
+        self.wait_apply = kwargs.get("wait_apply",30)
 
         TFAppHelper.__init__(
             self,
@@ -253,14 +255,19 @@ class TFCmdOnAWS(TFAppHelper):
             f'{self.base_cmd} {plan_cmd} -no-color > {self.tmp_base_output_file}.tfplan.out 2>&1 || echo $? > {status_file}',
             f'cat {self.tmp_base_output_file}.tfplan.out'
         ]
-        self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply)
+
+        if destroy:
+            self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply, additional_suffix="destroy")
+        else:
+            self.wrapper_cmds_to_s3(cmds, suffix="tfplan.out", last_apply=last_apply)
+
         cmds.append(f'if [ -f {status_file} ]; then rm -f {status_file}; exit 10; fi')
 
         # plan cmds
-        plan_cmds = [ f'{self.base_cmd} {plan_cmd} -out={self.tmp_base_output_file}.tfplan' ]
-        self.wrapper_cmds_to_s3(plan_cmds, suffix="tfplan", last_apply=last_apply)
-
-        cmds.extend(plan_cmds)
+        if not destroy:
+            plan_cmds = [ f'{self.base_cmd} {plan_cmd} -out={self.tmp_base_output_file}.tfplan' ]
+            self.wrapper_cmds_to_s3(plan_cmds, suffix="tfplan", last_apply=last_apply)
+            cmds.extend(plan_cmds)
 
         return cmds
 
@@ -280,13 +287,6 @@ class TFCmdOnAWS(TFAppHelper):
         cmds.extend(self._get_tf_plan())
         return cmds
 
-    def get_tf_pre_create(self):
-        """Get commands for pre-creation phase"""
-        cmds = self._get_tf_init()
-        cmds.extend(self._get_tf_validate())
-        cmds.extend(self._get_tf_plan())
-        return cmds
-
     def get_tf_apply(self, destroy_on_failure=None):
         """
         Get commands for applying Terraform configuration.
@@ -301,17 +301,45 @@ class TFCmdOnAWS(TFAppHelper):
         cmds.extend(self._get_tf_validate(last_apply=None))
         cmds.extend(self.s3_file_to_local(suffix="tfplan", last_apply=None))
 
-        if destroy_on_failure:
-            cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan) || ({self.base_cmd} destroy -auto-approve && exit 9)")
-        else:
-            cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan)")
+        # disabled this for now b/c you won't want to destroy entire infrastructure
+        # if an apply update fails
+        #if destroy_on_failure:
+        #    cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan) || ({self.base_cmd} destroy -auto-approve && exit 9)")
+        #else:
+        #    cmds.append(f"({self.base_cmd} apply {self.base_output_file}.tfplan)")
+
+        cmds.append(f'echo "{"#"*32}"')
+        cmds.append(f"{self.base_cmd} show {self.base_output_file}.tfplan")
+        cmds.append(f'echo "{"#"*32}"')
+        cmds.append(f'echo "# Be sure to look at proposed apply - pausing {self.wait_apply}s"')
+        cmds.append(f'echo "{"#"*32}"')
+
+        # Pause for the specified time
+        cmds.append(f'sleep {self.wait_apply}')
+
+        # run the actually apply
+        cmds.append(f"{self.base_cmd} apply {self.base_output_file}.tfplan")
 
         return cmds
 
     def get_tf_destroy(self):
         """Get commands for destroying Terraform resources"""
         cmds = self._get_tf_init(last_apply=True)
+
+        # this is just a self check
+        cmds.extend(self.s3_file_to_local(suffix="tfplan.out.destroy", last_apply=None))
+        cmds.extend(self.remove_s3_file(suffix="tfplan.out.destroy"))
+
+        cmds.append(f'echo "{"#"*32}"')
+        cmds.append(f"cat {self.base_output_file}.tfplan.out.destroy")
+        cmds.append(f'echo "{"#"*32}"')
+        cmds.append(f'echo "# Be sure to look at proposed destroy - pausing {self.wait_destroy}s"')
+        cmds.append(f'echo "{"#"*32}"')
+        cmds.append(f'sleep {int(self.wait_destroy)}')
+
+        # run the actually destroy
         cmds.append(f'{self.base_cmd} destroy -auto-approve')
+
         return cmds
 
     def get_tf_plan_destroy(self):

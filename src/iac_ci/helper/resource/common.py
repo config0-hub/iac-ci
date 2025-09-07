@@ -203,7 +203,7 @@ class TFAppHelper:
         # Combine all parts into one command
         return check_cmd + mv_cmd
 
-    def wrapper_cmds_to_s3(self, cmds, srcfile=None, suffix=None, last_apply=None):
+    def wrapper_cmds_to_s3(self, cmds, srcfile=None, suffix=None, last_apply=None, additional_suffix=None):
         """
         Generate commands to copy local files to S3.
 
@@ -224,10 +224,22 @@ class TFAppHelper:
 
         if last_apply:
             cmds.append(f'{base_cp_cmd}/applied/{_filename} || echo "trouble uploading output file"')
+
+            if additional_suffix:
+                cmds.append(f'{base_cp_cmd}/applied/{_filename}.{additional_suffix} || echo "trouble uploading additional output file"')
+
         else:
             cmds.append(f'{base_cp_cmd}/cur/{_filename} || echo "trouble uploading output file"')
 
+            if additional_suffix:
+                cmds.append(f'{base_cp_cmd}/cur/{_filename}.{additional_suffix} || echo "trouble uploading additional output file"')
+
         return cmds
+
+    def remove_s3_file(self,suffix):
+        dstfile = f'{self.base_output_file}.{suffix}'
+        _filename = os.path.basename(dstfile)
+        return [f'aws s3 rm s3://$REMOTE_STATEFUL_BUCKET/$STATEFUL_ID/cur/{_filename}']
 
     def s3_file_to_local(self, dstfile=None, suffix=None, last_apply=None):
         """

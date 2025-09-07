@@ -61,8 +61,12 @@ class CreateTempParamStoreEntry:
         Returns:
             str: Parameter value
         """
-        response = self.ssm.get_parameter(Name=name, WithDecryption=True)
-        return response['Parameter']['Value']
+        try:
+            response = self.ssm.get_parameter(Name=name, WithDecryption=True)
+            return response['Parameter']['Value']
+        except Exception as e:
+            self.logger.error(f'could not get parameter {e}')
+            return False
     
     def _get_expiration_parameter_policy(self):
         """
@@ -332,9 +336,14 @@ class Notification:
             self.logger.debug("no notification messages requested")
             return
 
-        inputargs = self._get_slack_inputargs()
+        try:
+            inputargs = self._get_slack_inputargs()
+        except Exception as e:
+            self.logger.warn(f"_get_slack_inputargs with error {e}")
+            inputargs = None
 
         if not inputargs:
+            self.logger.warn("could not get slack inputargs")
             return
 
         try:

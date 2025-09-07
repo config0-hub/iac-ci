@@ -76,8 +76,12 @@ class CloneCheckOutCode:
         private_key_hash = os.environ.get("PRIVATE_KEY_HASH")
 
         if not private_key_hash and self.ssm_ssh_key:
-            _ssm_info = self.ssm.get_parameter(Name=self.ssm_ssh_key, WithDecryption=True)
-            private_key_hash = _ssm_info["Parameter"]["Value"]
+            try:
+                _ssm_info = self.ssm.get_parameter(Name=self.ssm_ssh_key, WithDecryption=True)
+                private_key_hash = _ssm_info["Parameter"]["Value"]
+            except Exception as e:
+                private_key_hash = False
+                self.logger.error(f'could not get private key {e}')
 
         if not private_key_hash:
             failed_message = "private_key_hash not found"

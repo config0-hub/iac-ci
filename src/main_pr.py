@@ -277,7 +277,7 @@ class GitPr(PlatformReporter):
         if kwargs.get("failure_s3_key"):
             self.failure_s3_key = kwargs["failure_s3_key"]
 
-        self._set_error_search_tag()
+        self.set_misc_pr_tags()
 
     def _analyze_tfplan_for_summary(self, plan_output):
         """
@@ -738,16 +738,6 @@ class GitPr(PlatformReporter):
 
         return comment_info
 
-    def _clean_all_pr_comments(self):
-        """
-        Clean out existing comments in the PR by deleting them.
-
-        This includes any status comment created by this application, as well as
-        any other comments that may have been created with the same search tag.
-        """
-        self.clean_pr_comments()
-        self.clean_status_comment_id()
-
     def _delete_and_add_comment(self, pr_md_info, existing_comments=None):
         """
         Deletes existing comments in the PR and adds a new comment with the latest comment body.
@@ -798,7 +788,7 @@ class GitPr(PlatformReporter):
             self.logger.debug(f"Adding new comment comment_id for destroy.")
             comment_info = self.github_repo.add_pr_comment(pr_md_info["comment_body"])
 
-        self._clean_all_pr_comments()
+        self.clean_all_pr_comments()
 
         try:
             pr_md_info.update(comment_info)
@@ -1057,29 +1047,6 @@ class GitPr(PlatformReporter):
             "md5sum": md5sum_str
         }
 
-    def _clear_report_all_comments(self):
-
-        if not hasattr(self, "github_repo") or not self.github_repo:
-            return False
-
-        search_tag = "report all tf"
-
-        comments = self.github_repo.get_pr_comments(search_tag=search_tag)
-        report_comments = self.github_repo.get_pr_comments(search_tag=f'#{self.base_report_tag}')
-
-        if comments and len(comments) > 1:
-            comments.sort(key=lambda comment: comment["id"])
-            for comment in comments[:-1]:
-                comment_id = comment["id"]
-                self.logger.debug(f'deleting "report all tf" comment {comment_id}')
-                self.github_repo.delete_pr_comment(comment_id)
-
-        if report_comments:
-            for comment in report_comments:
-                comment_id = comment["id"]
-                self.logger.debug(f'deleting report related comment {comment_id}')
-                self.github_repo.delete_pr_comment(comment_id)
-
     def _exec_parallel_runs(self, run_ids=None):
         """
         Execute parallel runs analysis and create summary PR comment.
@@ -1097,8 +1064,8 @@ class GitPr(PlatformReporter):
         self.logger.json(run_ids)
         self.logger.debug("#" * 32)
 
-        self._clear_report_all_comments()
-        self._clean_all_pr_comments()
+        self.clear_report_all_comments()
+        self.clean_all_pr_comments()
 
         runs_summary = self._get_parallel_runs_summary(run_ids)
         pr_md_info = self._get_pr_md_parallel_runs(runs_summary)
@@ -1191,7 +1158,7 @@ class GitPr(PlatformReporter):
 
 </details>
 '''
-        self._clean_all_pr_comments()
+        self.clean_all_pr_comments()
 
         # Update PR comment with new content
         new_comment = f'{status_comment_info["body"]}\n\n{content}'

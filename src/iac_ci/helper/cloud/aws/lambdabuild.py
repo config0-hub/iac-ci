@@ -232,8 +232,6 @@ class LambdaResourceHelper:
                 self.results["failed_message"] = "the resources have drifted"
             elif self.method == "check":
                 self.results["failed_message"] = "the resources failed check"
-            elif self.method == "pre-create":
-                self.results["failed_message"] = "the resources failed pre-create"
             elif self.method == "apply":
                 self.results["failed_message"] = "applying of resources have failed"
             elif self.method == "create":

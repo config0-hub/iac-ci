@@ -203,37 +203,42 @@ class Lambdabuild(LambdaParams):
             list: Build commands for specified method
             
         Raises:
-            ValueError: If method is not one of create/validate/ci/pre-create/check/apply/destroy
+            ValueError: If method is not one of create/validate/ci/check/apply/destroy
         """
         tfsec_cmds = self.tfsec_cmds.get_all_cmds()
         infracost_cmds = self.infracost_cmds.get_all_cmds()
 
-        if self.method in ["create", "apply"]:
-            cmds = self.tfcmds.get_tf_apply()
-        elif self.method in [ "ci", "check", "plan"]:
+        # explicitly disable apply or destroy with lambda
+        #if self.method in ["create", "apply"]:
+        #    cmds = self.tfcmds.get_tf_apply()
+        #elif self.method == "destroy":
+        #    cmds = self.tfcmds.get_tf_destroy()
+
+
+        if self.method in [ "ci", "check", "plan"]:
             cmds = [ self.tfsec_cmds.backup_s3_file(suffix="out") ]
             cmds.append(self.tfsec_cmds.backup_s3_file(suffix="json"))
             cmds.append(self.infracost_cmds.backup_s3_file(suffix="out"))
             cmds.append(self.infracost_cmds.backup_s3_file(suffix="json"))
             cmds.extend(self.tfcmds.backup_cmds_tf())
-            cmds.extend(self.tfcmds.get_tf_ci())
-            cmds.extend(tfsec_cmds)
-            cmds.extend(infracost_cmds)
         elif self.method in ["plan_destroy"]:
             cmds = self.tfcmds.get_tf_plan_destroy()
-        elif self.method == "pre-create":
-            cmds = self.tfcmds.get_tf_pre_create()
         elif self.method in ["validate", "drift"]:
             cmds = self.tfcmds.get_tf_chk_drift()
         elif self.method in ["report"]:
-            cmds = self.tfcmds.get_tf_ci()
-            cmds.extend(tfsec_cmds)
-            cmds.extend(infracost_cmds)
-            cmds.extend(self.tfcmds.get_tf_chk_drift(cmds_alone=True))
-        elif self.method == "destroy":
-            cmds = self.tfcmds.get_tf_destroy()
+            cmds = []
         else:
-            raise ValueError("method needs to be create/validate/ci/pre-create/check/apply/destroy")
+            raise ValueError("method needs to be create/validate/ci/check/apply/destroy")
+
+        if self.method in [ "ci", "check", "plan", "report"]:
+            cmds.extend(self.tfcmds.get_tf_ci())
+
+            if self.method in ["ci", "check", "report"]:
+                cmds.extend(tfsec_cmds)
+                cmds.extend(infracost_cmds)
+
+                if self.method in ["report"]:
+                    cmds.extend(self.tfcmds.get_tf_chk_drift(cmds_alone=True))
 
         if os.environ.get("DEBUG_IAC_CI"):
             self.logger.debug("*"*32)

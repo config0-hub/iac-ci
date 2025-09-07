@@ -127,6 +127,8 @@ class Codebuild(CodebuildParams, CreateTempParamStoreEntry):
                                  version=self.version,
                                  tf_bucket_path=self.tf_bucket_path,
                                  add_ssm_names=kwargs.get("add_ssm_names"),
+                                 wait_destroy=kwargs.get("wait_destroy"),
+                                 wait_apply=kwargs.get("wait_apply"),
                                  arch="linux_amd64"
                                  )
 

@@ -76,6 +76,24 @@ class TriggerCodebuild(PlatformReporter):
         if self.build_env_vars.get("ADD_SSM_NAMES"):
             cinputargs["add_ssm_names"] = self.build_env_vars["ADD_SSM_NAMES"]
 
+        try:
+            cinputargs["wait_destroy"] = int(self.build_env_vars.get("IAC_CI_WAIT_DESTROY"))
+        except:
+            cinputargs["wait_destroy"] = 120
+
+        if cinputargs["wait_destroy"] < 120:
+            print('wait_destroy needs to be greater than or equal to 120 seconds')
+            cinputargs["wait_destroy"] = 120
+
+        try:
+            cinputargs["wait_apply"] = int(self.build_env_vars.get("IAC_CI_WAIT_DESTROY"))
+        except:
+            cinputargs["wait_apply"] = 30
+
+        if cinputargs["wait_apply"] < 5:
+            print('wait_apply needs to be greater than or equal to 5 seconds')
+            cinputargs["wait_apply"] = 5
+
         if os.environ.get("DEBUG_IAC_CI"):
             self.logger.debug("#" * 32)
             self.logger.debug("# cinputargs")
@@ -145,6 +163,7 @@ class TriggerCodebuild(PlatformReporter):
                 self.results["failed_message"] = results["failed_message"]
             raise RuntimeError(self.results["failed_message"])
 
+
         # successful at this point
         self.results["inputargs"] = results["inputargs"]
         self.run_info["build_id"] = results["inputargs"]["build_id"]
@@ -155,6 +174,11 @@ class TriggerCodebuild(PlatformReporter):
         self.results["msg"] = f"triggered lambda with s3://{self.remote_src_bucket}/{self.remote_src_bucket_key}"
         self.results["remote_src_bucket"] = self.remote_src_bucket
         self.results["remote_src_bucket_key"] = self.remote_src_bucket_key
+
+        self.setup_github()
+        if self.run_info.get("build_url"):
+            content = f'[execution details]({self.run_info["build_url"]})' + "\n" + self.update_status_tag
+            self.github_repo.add_pr_comment(content)
 
         summary_msg = f"# Triggered \n# trigger_id: {self.trigger_id} \n# iac_ci_id: {self.iac_ci_id} \n"
 

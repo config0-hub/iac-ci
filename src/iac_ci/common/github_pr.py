@@ -61,7 +61,7 @@ class GitHubRepo:
         self.search_tag = kwargs.get("search_tag")
 
         if self.search_tag:
-            self.logger.debug(f"Using search_tag: {self.search_tag}")
+            self.logger.debug(f"GitHubRepo - search_tag set: {self.search_tag}")
 
         self.apply = None
 
@@ -215,10 +215,8 @@ class GitHubRepo:
             page += 1
 
         if search_tag:
-            self.logger.debug(f"get_pr_comments: using search_tag {search_tag}")
             return self._filter_comment_by_tag(comments, search_tag=search_tag)
         elif use_default_search_tag:
-            self.logger.debug(f"get_pr_comments: using default search_tag {self.search_tag}")
             return self._filter_comment_by_tag(comments, search_tag=self.search_tag)
 
         return comments
@@ -243,16 +241,14 @@ class GitHubRepo:
         if not search_tag:
             raise ValueError("Search tag is needed to parse through comments")
 
-        self.logger.debug(f"Filter by search tag #{search_tag}")
         results = []
-
-        self.logger.debug(f"Total comments: {len(comments)}")
 
         for comment in comments:
             if search_tag in comment['body']:
                 results.append(comment)
 
-        self.logger.debug(f"Search tag #{search_tag} found {len(results)}")
+        self.logger.debug(f"search tag #{search_tag} found {len(results)}")
+
         return results
 
     @staticmethod

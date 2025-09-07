@@ -108,7 +108,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Notification.__init__(self)
         CreateTempParamStoreEntry.__init__(self)
 
-        self._set_error_search_tag()
+        self.set_misc_pr_tags()
         self.results = {
             "msg": None,
             "step_func": self.step_func,
@@ -129,6 +129,9 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             "run_id": self.run_id,
             "trigger_id": self.trigger_id
         }
+
+        # set it initially
+        self.set_misc_pr_tags()
 
     def _get_kwargs_body(self,**kwargs):
 
@@ -247,7 +250,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         else:
             return
 
-    def clean_pr_comments(self,search_tag="#iac-ci:::status_comment",ignore_expire_epoch=True):
+    def _wrapper_clean_pr_comments(self,search_tag=None):
         """
         Cleans up outdated or irrelevant pull request comments in the GitHub repository.
 
@@ -259,7 +262,11 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             bool: False if the GitHub repository is not set or accessible, otherwise None.
         """
         if not hasattr(self, "github_repo") or not self.github_repo:
+            self.logger.warn("_wrapper_clean_pr_comments: github_repo not set to clean up pr comments")
             return False
+
+        if not search_tag:
+            search_tag = self.update_status_tag
 
         search_tag_comments = self.github_repo.get_pr_comments(search_tag=search_tag)
 
@@ -273,44 +280,12 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         if error_comments:
             comments.extend(error_comments)
 
-        if not comments:
-            return
+        update_comments = self.github_repo.get_pr_comments(search_tag=self.update_status_tag)
 
-        epoch_time = int(time())
+        if update_comments:
+            comments.extend(update_comments)
 
-        _to_delete = []
-
-        for comment in comments:
-            comment_id = comment["id"]
-            data_str = self.extract_from_substring(comment['body'], search_tag)
-
-            if not data_str:
-                continue
-
-            try:
-                parts = [part for part in data_str.strip().split() if part]
-                run_id = parts[1]
-                expire_epoch = parts[2]
-            except:
-                continue
-
-            if ignore_expire_epoch:
-                _to_delete.append(comment_id)
-                continue
-            elif epoch_time > int(expire_epoch):
-                _to_delete.append(comment_id)
-                continue
-
-            if run_id == self.run_id:
-                _to_delete.append(comment_id)
-                continue
-
-        if not _to_delete:
-            return
-
-        for comment_id in _to_delete:
-            self.logger.debug(f"deleting comment {comment_id}")
-            self.github_repo.delete_pr_comment(comment_id)
+        self._delete_pr_comments(comments)
 
     def get_github_token(self):
         """
@@ -326,15 +301,26 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         """
         if not self.trigger_info:
             self._set_trigger_info()
+
         if not self.trigger_info:
             return {
                 "status": False,
                 "failed_message": "trigger info could not be set"
             }
-        _ssm_info = self.ssm.get_parameter(
-            Name=self.trigger_info["ssm_iac_ci_github_token"],
-            WithDecryption=True
-        )
+
+        try:
+            _ssm_info = self.ssm.get_parameter(
+                Name=self.trigger_info["ssm_iac_ci_github_token"],
+                WithDecryption=True
+            )
+        except Exception as e:
+            self.logger.warn(f"could not fetch SSM info: {e}")
+            return {
+                "status": False,
+                "failed_message": "trigger info could not be set"
+            }
+
+
         return {
             "status": True,
             "value": _ssm_info["Parameter"]["Value"]
@@ -381,7 +367,7 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         self.set_github_token()
 
-        if self.github_repo and not reset:
+        if hasattr(self,"github_repo") and self.github_repo and not reset:
             return self.github_repo
 
         self.github_repo = GitHubRepo(
@@ -391,17 +377,23 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             owner=self.webhook_info["owner"]
         )
 
-    def _set_error_search_tag(self):
+    def set_misc_pr_tags(self):
 
         try:
             self.error_tag = f"iac-ci:::tag::error:status repo_name: `{self.webhook_info['repo_name']}`, pr_number: `{self.webhook_info['pr_number']}`"
         except:
-            self.error_tag = f"iac-ci:::tag::error:status"
+            self.error_tag = "iac-ci:::tag::error:status"
 
-        return self.error_tag
+
+        try:
+            self.update_status_tag = f"iac-ci:::status_comment repo_name: `{self.webhook_info['repo_name']}`, pr_number: `{self.webhook_info['pr_number']}`"
+        except:
+            self.update_status_tag = "iac-ci:::status_comment"
+
+        return
 
     def add_error_comment_to_pr(self,failed_message):
-        self._set_error_search_tag()
+        self.set_misc_pr_tags()
         content = f'{failed_message}\n\n#{self.error_tag}'
         self.setup_github()
         self.github_repo.add_pr_comment(content)
@@ -468,10 +460,10 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         return content
 
     def get_cur_status_comment(self):
-        github_repo = self._set_up_github_conn_to_repo()
+        self.github_repo = self._set_up_github_conn_to_repo()
         status_comment_id = self.get_status_comment_id()
 
-        return github_repo.get_comment_by_id(status_comment_id)
+        return self.github_repo.get_comment_by_id(status_comment_id)
 
     def get_status_comment_id(self):
         try:
@@ -485,14 +477,71 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
 
         return status_comment_id
 
-    def clean_status_comment_id(self):
+    def _delete_pr_comments(self,comments):
 
-        github_repo = self._set_up_github_conn_to_repo()
+        if not comments:
+            return
+
+        for comment in comments:
+            comment_id = comment["id"]
+            self.logger.debug(f'deleting update related comment {comment_id}')
+            self.github_repo.delete_pr_comment(comment_id)
+
+    def _clean_update_status_tag(self):
+
+        try:
+            comments = self.github_repo.get_pr_comments(search_tag=self.update_status_tag)
+        except:
+            comments = None
+
+        return self._delete_pr_comments(comments)
+
+    def _clean_report_status_tag(self):
+        try:
+            comments = self.github_repo.get_pr_comments(search_tag=f'#{self.base_report_tag}')
+        except:
+            comments = None
+
+        return self._delete_pr_comments(comments)
+
+    def clear_report_all_comments(self):
+
+        if not hasattr(self, "github_repo") or not self.github_repo:
+            self.logger.warn(f'self.github_repo was not initialized')
+            self.logger.warn("clean_report_all_comments: github_repo not set to clean up pr comments")
+            return False
+
+        search_tag = "report all tf"
+        comments = self.github_repo.get_pr_comments(search_tag=search_tag)
+        if comments and len(comments) > 1:
+            comments.sort(key=lambda comment: comment["id"])
+            for comment in comments[:-1]:
+                comment_id = comment["id"]
+                self.logger.debug(f'deleting "report all tf" comment {comment_id}')
+                self.github_repo.delete_pr_comment(comment_id)
+
+        self._clean_update_status_tag()
+        self._clean_report_status_tag()
+
+    def clean_all_pr_comments(self):
+        """
+        Clean out existing comments in the PR by deleting them.
+
+        This includes any status comment created by this application, as well as
+        any other comments that may have been created with the same search tag.
+        """
+        self._wrapper_clean_pr_comments()
+        self._clean_run_status_comment_id()
+        self._clean_update_status_tag()
+
+    def _clean_run_status_comment_id(self):
+
+        self.github_repo = self._set_up_github_conn_to_repo()
         status_comment_id = self.get_status_comment_id()
 
         if status_comment_id:
             try:
-                github_repo.delete_pr_comment(status_comment_id)
+                self.github_repo.delete_pr_comment(status_comment_id)
             except Exception as e:
                 self.logger.debug(f"could not delete pr comment {status_comment_id}: {str(e)}")
 
@@ -528,28 +577,30 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
         Returns:
         dict: A dictionary with the comment ID and URL of the added comment.
         """
-        github_repo = self._set_up_github_conn_to_repo()
-        base_comment = f'+ Executed By iac-ci\n    + owner: {github_repo.owner}\n    + repo: {github_repo.repo_name}\n    + pr_number: {github_repo.pr_number}'
+        self.github_repo = self._set_up_github_conn_to_repo()
+        base_comment = f'+ Executed By iac-ci\n    + owner: {self.github_repo.owner}\n    + repo: {self.github_repo.repo_name}\n    + pr_number: {self.github_repo.pr_number}'
         status_comment = f'{base_comment}\n+ {self.get_pr_status(status=status)}'
         ci_link_content = self._ci_links(status_comment)
-        existing_comments = github_repo.get_pr_comments(use_default_search_tag=True)
+        existing_comments = self.github_repo.get_pr_comments(use_default_search_tag=True)
 
         if existing_comments:
             comment_id = existing_comments[0]["id"]
             comment = existing_comments[0]["body"].replace(f'#{self.search_tag}', "").strip().rstrip('\n').rstrip('\r')
             comment = comment + "\n" + ci_link_content
-            github_repo.delete_pr_comment(comment_id)
+            self.github_repo.delete_pr_comment(comment_id)
         else:
             comment = ci_link_content
 
-        pr_info = github_repo.add_pr_comment(comment)
+        self.clean_all_pr_comments()
 
-        self.clean_pr_comments()
+        pr_info = self.github_repo.add_pr_comment(comment)
+
+        self._wrapper_clean_pr_comments()
 
         try:
             status_comment_id = self.run_info["status_comment_id"]
             if status_comment_id:
-                github_repo.delete_pr_comment(status_comment_id)
+                self.github_repo.delete_pr_comment(status_comment_id)
         except KeyError:
             self.logger.debug("No status_comment_id found in run_info")
 
@@ -1277,11 +1328,15 @@ class PlatformReporter(Notification, CreateTempParamStoreEntry):
             dict: A dictionary containing the input arguments for HTTP requests.
         """
         if not self.callback_token:
-            _ssm_info = self.ssm.get_parameter(
-                Name=self.ssm_callback_token,
-                WithDecryption=True
-            )
-            self.callback_token = _ssm_info["Parameter"]["Value"]
+            try:
+                _ssm_info = self.ssm.get_parameter(
+                    Name=self.ssm_callback_token,
+                    WithDecryption=True
+                )
+                self.callback_token = _ssm_info["Parameter"]["Value"]
+            except Exception as e:
+                self.logger.error(f'could not get call back token: {e}')
+                return False
 
         name = f"{self.build_name}-{self.phase}" if self.phase else self.build_name
         api_endpoint = f"https://{self.user_endpoint}/api/v1.0/run"
