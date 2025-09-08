@@ -304,42 +304,28 @@ class GitPr(PlatformReporter):
         :return: String indicating severity or success
         """
         if not tfsec_output:
-            return "success"
+            self.logger.warn('tfsec_output is empty')
+            return
 
         clean_output = strip_ansi_codes(tfsec_output)
         lines = clean_output.split('\n')
 
         # Find the results section by reading backwards
         results_section = []
-        found_results = False
 
         for i in range(len(lines) - 1, -1, -1):
             line = lines[i].strip()
-
-            # If we haven't found results yet, look for it
-            if not found_results:
-                if line.lower() == "results":
-                    found_results = True
-                    results_section.append(line)
-                    continue
-            else:
-                # We're in the results section, collect lines until we hit a delimiter
-                if line and all(c in '─-=' for c in line):
-                    # Found delimiter, stop collecting
-                    break
+            results_section.append(line)
+            if line.lower() == "results":
                 results_section.append(line)
+                break
 
-        if not found_results:
-            return "success"
+        if not results_section:
+            self.logger.debug("No results section found in tfsec output")
+            return
 
         # Reverse the results section since we collected it backwards
         results_section.reverse()
-
-        # Parse the counts from the results section
-        critical = 0
-        high = 0
-        medium = 0
-        low = 0
 
         for line in results_section:
             line = line.strip().lower()
@@ -347,32 +333,39 @@ class GitPr(PlatformReporter):
                 try:
                     critical = int(line.split()[-1])
                 except (ValueError, IndexError):
-                    pass
-            elif line.startswith('high'):
+                    critical = 0
+
+                if critical > 0:
+                    return "high"
+
+            if line.startswith('high'):
                 try:
                     high = int(line.split()[-1])
                 except (ValueError, IndexError):
-                    pass
-            elif line.startswith('medium'):
+                    high = 0
+
+                if high > 0:
+                    return "high"
+
+            if line.startswith('medium'):
                 try:
                     medium = int(line.split()[-1])
                 except (ValueError, IndexError):
-                    pass
-            elif line.startswith('low'):
+                    medium = 0
+
+                if medium > 0:
+                    return "medium"
+
+            if line.startswith('low'):
                 try:
                     low = int(line.split()[-1])
                 except (ValueError, IndexError):
-                    pass
+                    low = 0
 
-        # Determine severity based on counts
-        if critical > 0 or high > 0:
-            return "high"
-        elif medium > 0:
-            return "medium"
-        elif low > 0:
-            return "low"
-        else:
-            return "success"
+                if low > 0:
+                    return "low"
+
+        return "success"
 
     def _get_s3_artifact(self, suffix_key, ref_id=None):
         """
@@ -1047,8 +1040,7 @@ class GitPr(PlatformReporter):
         content += table
 
         # Add legend for quick reference
-        content += "\n**Legend:**\n  Drift: 🔴 Yes | ✅ No\n  Security: ❌ High | ⚠️ Medium | ℹ️ Low\n"
-        #content += "\n**Legend:** ❌ Drift Detected | 🟣 Add | 🟠 Change | 🔴 Delete | ✅ No Drift/Issues | ❌ Critical/High | ⚠️ Medium | ℹ️ Low\n"
+        content += '\nDrift: 🔴 Yes | ✅ No\nSecurity: ❌ High | ⚠️ Medium | ℹ️ Low'
 
         # Add CI details if available
         ci_link_content = self._ci_links()
