@@ -109,28 +109,7 @@ def format_terraform_plan(plan_output):
 def format_tfsec_output(tfsec_output):
     """Format tfsec output with severity indicators and summary"""
     clean_output = strip_ansi_codes(tfsec_output)
-    
     formatted = "\n🔒 **Security Scan Results**\n\n"
-    
-    # Count issues by severity - more robust counting
-    high_count = len(re.findall(r"(CRITICAL|HIGH)", clean_output, re.IGNORECASE))
-    medium_count = len(re.findall(r"MEDIUM", clean_output, re.IGNORECASE))
-    low_count = len(re.findall(r"LOW", clean_output, re.IGNORECASE))
-    
-    if high_count == 0 and medium_count == 0 and low_count == 0:
-        if "No problems detected" in clean_output or len(clean_output.strip()) == 0:
-            formatted += "✅ **No security issues found!**\n"
-            return formatted
-    
-    # Summary
-    formatted += "**Summary:**\n"
-    if high_count > 0:
-        formatted += f"- 🔴 **{high_count} HIGH/CRITICAL** severity issues\n"
-    if medium_count > 0:
-        formatted += f"- 🟠 **{medium_count} MEDIUM** severity issues\n"
-    if low_count > 0:
-        formatted += f"- 🟡 **{low_count} LOW** severity issues\n"
-    
     formatted += "\n```\n"
     formatted += clean_output
     formatted += "\n```"
@@ -328,40 +307,72 @@ class GitPr(PlatformReporter):
             return "success"
 
         clean_output = strip_ansi_codes(tfsec_output)
+        lines = clean_output.split('\n')
 
-        # Look for the results section - more flexible regex pattern
-        results_match = re.search(r"(?:results|Results).*?(?:passed|Passed).*?(\d+).*?(?:critical|Critical).*?(\d+).*?(?:high|High).*?(\d+).*?(?:medium|Medium).*?(\d+).*?(?:low|Low).*?(\d+)", 
-                                clean_output, 
-                                re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        # Find the results section by reading backwards
+        results_section = []
+        found_results = False
 
-        if results_match:
-            critical = int(results_match.group(1))
-            high = int(results_match.group(2))
-            medium = int(results_match.group(3))
-            low = int(results_match.group(4))
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
 
-            # Group critical and high together
-            if critical > 0 or high > 0:
-                return "high"
-            elif medium > 0:
-                return "medium"
-            elif low > 0:
-                return "low"
+            # If we haven't found results yet, look for it
+            if not found_results:
+                if line.lower() == "results":
+                    found_results = True
+                    results_section.append(line)
+                    continue
             else:
-                return "success"
+                # We're in the results section, collect lines until we hit a delimiter
+                if line and all(c in '─-=' for c in line):
+                    # Found delimiter, stop collecting
+                    break
+                results_section.append(line)
 
-        # Alternative check for critical/high/medium/low issues
-        if re.search(r"(CRITICAL|HIGH)", clean_output, re.IGNORECASE):
-            return "high"
-        elif re.search(r"MEDIUM", clean_output, re.IGNORECASE):
-            return "medium"
-        elif re.search(r"LOW", clean_output, re.IGNORECASE):
-            return "low"
-        elif "No problems detected" in clean_output or not clean_output.strip():
+        if not found_results:
             return "success"
 
-        # Default to success if no issues detected
-        return "success"
+        # Reverse the results section since we collected it backwards
+        results_section.reverse()
+
+        # Parse the counts from the results section
+        critical = 0
+        high = 0
+        medium = 0
+        low = 0
+
+        for line in results_section:
+            line = line.strip().lower()
+            if line.startswith('critical'):
+                try:
+                    critical = int(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith('high'):
+                try:
+                    high = int(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith('medium'):
+                try:
+                    medium = int(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+            elif line.startswith('low'):
+                try:
+                    low = int(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+
+        # Determine severity based on counts
+        if critical > 0 or high > 0:
+            return "high"
+        elif medium > 0:
+            return "medium"
+        elif low > 0:
+            return "low"
+        else:
+            return "success"
 
     def _get_s3_artifact(self, suffix_key, ref_id=None):
         """
@@ -994,18 +1005,23 @@ class GitPr(PlatformReporter):
                 destroy_count = int(plan_summary.get('destroy', '0'))
 
                 if add_count == 0 and change_count == 0 and destroy_count == 0:
-                    tf_plan_cell = "✅ No Drift"
+                    #tf_plan_cell = "✅ No Drift"
+                    tf_plan_cell = "✅"
                 else:
                     # Show counts with color-coded indicators (red X for drift)
                     changes = []
-                    if add_count > 0:
-                        changes.append(f"❌/🟣+{add_count}")
-                    if change_count > 0:
-                        changes.append(f"❌/🟠~{change_count}")
-                    if destroy_count > 0:
-                        changes.append(f"❌/🔴-{destroy_count}")
+                    if add_count > 0 or change_count > 0 or destroy_count > 0:
+                        #changes.append("❌")
+                        tf_plan_cell = "🔴"
 
-                    tf_plan_cell = f"{' '.join(changes)}"
+                    #if add_count > 0:
+                    #    changes.append("🟣")
+                    #if change_count > 0:
+                    #    changes.append("🟠")
+                    #if destroy_count > 0:
+                    #    changes.append("🔴")
+
+                    #tf_plan_cell = f"{'|'.join(changes)}"
             else:
                 tf_plan_cell = "❓ Unknown"
 
@@ -1031,7 +1047,8 @@ class GitPr(PlatformReporter):
         content += table
 
         # Add legend for quick reference
-        content += "\n**Legend:** ❌ Drift Detected | 🟣 Add | 🟠 Change | 🔴 Delete | ✅ No Drift/Issues | ❌ Critical/High | ⚠️ Medium | ℹ️ Low\n"
+        content += "\n**Legend:**\n  Drift: 🔴 Yes | ✅ No\n  Security: ❌ High | ⚠️ Medium | ℹ️ Low\n"
+        #content += "\n**Legend:** ❌ Drift Detected | 🟣 Add | 🟠 Change | 🔴 Delete | ✅ No Drift/Issues | ❌ Critical/High | ⚠️ Medium | ℹ️ Low\n"
 
         # Add CI details if available
         ci_link_content = self._ci_links()
