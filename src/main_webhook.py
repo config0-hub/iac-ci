@@ -637,9 +637,11 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                 comment = None
 
         if not comment:
-            self.logger.debug("comment not set")
+            failed_message = "comment not set"
+            self.logger.debug(failed_message)
             return {
-                "status": False
+                "status": False,
+                "failed_message": failed_message
             }
 
         if len(comment) < 100:
@@ -648,9 +650,11 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         comment_params = [comment.strip() for comment in comment.split(" ")]
 
         if comment_params[0] not in self.valid_actions:
-            self.logger.warn(f"comment {comment_params[0]} must be {self.valid_actions}")
+            failed_message = f"comment {comment_params[0]} must be {self.valid_actions}"
+            self.logger.debug(failed_message)
             return {
-                "status": False
+                "status": False,
+                "failed_message": failed_message
             }
 
         for action in self.valid_actions:
@@ -778,7 +782,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
                 "status": False
             }
 
-        failed_message = "no action settled on"
+        failed_message = "no valid action matched or conditions met"
         return {
             "failed_message": failed_message,
             "action": None,
@@ -849,7 +853,11 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
     def _get_iac_ci_folder(self):
 
         # check directories
-        changed_dirs = list(set([changed_dir.split("/.iac_ci")[0] if "/.iac_ci" in changed_dir else changed_dir for changed_dir in self._get_changed_dirs()]))
+        matched_dirs = list(set([changed_dir.split("/.iac_ci")[0] if "/.iac_ci" in changed_dir else changed_dir for changed_dir in self._get_changed_dirs()]))
+
+        changed_dirs = [path for path in matched_dirs
+             if not any(path.startswith(other + '/')
+                       for other in matched_dirs if other != path)]
 
         if len(changed_dirs) != 1:
             failed_message = f"should only find one matched folder - found instead {changed_dirs} in the same PR"
@@ -930,9 +938,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.results["initialized"] = None
             self.results["msg"] = failed_message
             self.add_log(self.results["msg"])
-            return False
+            return {
+                "status": False,
+                "failed_message": failed_message
+            }
 
-        return iac_ci_folders_configs
+        return {
+            "status": True,
+            "iac_ci_folders_configs": iac_ci_folders_configs
+        }
 
     def _exec_iac_ci_folder(self):
 
@@ -944,10 +958,17 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self.results["status"] = None
             self.results["initialized"] = None
             self.results["msg"] = failed_message
+            self.results["failed_message"] = failed_message
             self.add_log(self.results["msg"])
-            return False
+            return {
+                "status": False,
+                "failed_message": failed_message
+            }
 
-        return iac_ci_folder_configs
+        return {
+            "status": True,
+            "iac_ci_folder_configs":iac_ci_folder_configs
+        }
 
     def _process_post_save_run_info(self,_save_run_info):
 
@@ -1053,15 +1074,20 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             return False
 
         if self.report_folders:
-            iac_ci_folder_configs = self._exec_report_folders()
+            iac_ci_folder_configs_info = self._exec_report_folders()
         else:
-            iac_ci_folder_configs = self._exec_iac_ci_folder()
+            iac_ci_folder_configs_info = self._exec_iac_ci_folder()
 
-        if not iac_ci_folder_configs:
-            msg = "`iac_ci_folder_configs` cannot be evaluated"
-            self._add_error_comment_to_pr(msg)
+        if not iac_ci_folder_configs_info.get("status"):
+            if iac_ci_folder_configs_info.get("failed_message"):
+                failed_message = iac_ci_folder_configs_info.get("failed_message")
+            else:
+                failed_message = "`iac_ci_folder_configs` cannot be evaluated"
+            self._add_error_comment_to_pr(failed_message)
             self._update_false()
             return False
+
+        iac_ci_folder_configs = iac_ci_folder_configs_info["iac_ci_folder_configs"]
 
         if not self.report_folders and (action in ["destroy","apply"] and not iac_ci_folder_configs.get(action)):
             failed_message = f'Not Allowed @ `.iac_ci/config.yaml`: **iac_ci_folder=`{iac_ci_folder_configs["iac_ci_folder"]}` | action=`{action}`**'
