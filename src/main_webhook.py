@@ -134,7 +134,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         self._set_order()
 
-    def clone_and_get_iac_folders_configs(self):
+    def _clone_and_get_iac_folders_configs(self):
 
         try:
             self.write_private_key()
@@ -142,8 +142,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
         except:
             failed_message = traceback.format_exc()
             self.logger.debug(failed_message)
+            return {
+                "status": False,
+                "failed_message": failed_message
+            }
 
-        return self.find_and_process_config_files(config_path=".iac_ci/config.yaml")
+        return {
+            "status":True,
+            "configs": self.find_and_process_config_files(config_path=".iac_ci/config.yaml")
+        }
 
     def get_stepf_arn(self):
         """
@@ -882,12 +889,13 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             failed_message = f"iac_ci_folder in db: {iac_ci_folder_db} not same as iac_ci_folder: {iac_ci_folder}"
             self.logger.warn(failed_message)
 
-        iac_ci_folders_configs = self.clone_and_get_iac_folders_configs()
+        configs_info = self._clone_and_get_iac_folders_configs()
+        if not configs_info.get("status"):
+            return configs_info
 
         # Extract destroy and apply values from the inner dictionary
-        config_values = iac_ci_folders_configs[iac_ci_folder]
-        destroy_value = config_values["destroy"]
-        apply_value = config_values["apply"]
+        destroy_value = configs_info["configs"][iac_ci_folder]["destroy"]
+        apply_value = configs_info["configs"][iac_ci_folder]["apply"]
 
         # if it got this far, then it is probably
         # the first time it is registered the pr_id
@@ -922,17 +930,22 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
     def _exec_report_folders(self):
 
-        iac_ci_folders_configs = self.clone_and_get_iac_folders_configs()
-        iac_ci_folders = list(iac_ci_folders_configs.keys())
+        configs_info = self._clone_and_get_iac_folders_configs()
+
+        if not configs_info.get("status"):
+            return configs_info
+
+        configs = configs_info["configs"]
+        folders = list(configs.keys())
 
         if self.report_folders == 'all':
-            self.report_folders = iac_ci_folders
+            self.report_folders = folders
             self.results["report_folders"] = self.report_folders
-        elif self.report_folders in iac_ci_folders:
+        elif self.report_folders in folders:
             self.report_folders = [self.report_folders]
             self.results["report_folders"] = self.report_folders
         else:
-            failed_message = f"report_folders {self.report_folders} not found in iac_ci_folders {iac_ci_folders}"
+            failed_message = f"report_folders {self.report_folders} not found in iac_ci_folders {folders}"
             self.logger.error(failed_message)
             self.results["status"] = None
             self.results["initialized"] = None
@@ -945,16 +958,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         return {
             "status": True,
-            "iac_ci_folders_configs": iac_ci_folders_configs
+            "configs": configs
         }
 
     def _exec_iac_ci_folder(self):
 
-        iac_ci_folder_configs = self._get_iac_ci_folder()
+        configs = self._get_iac_ci_folder()
 
-        if not iac_ci_folder_configs.get("status"):
-            failed_message = iac_ci_folder_configs.get("failed_message")
-            self.logger.error(failed_message)
+        if not configs.get("status"):
+            failed_message = configs.get("failed_message")
             self.results["status"] = None
             self.results["initialized"] = None
             self.results["msg"] = failed_message
@@ -967,7 +979,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         return {
             "status": True,
-            "iac_ci_folder_configs":iac_ci_folder_configs
+            "configs":configs
         }
 
     def _process_post_save_run_info(self,_save_run_info):
@@ -1087,7 +1099,7 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
             self._update_false()
             return False
 
-        iac_ci_folder_configs = iac_ci_folder_configs_info["iac_ci_folder_configs"]
+        iac_ci_folder_configs = iac_ci_folder_configs_info["configs"]
 
         if not self.report_folders and (action in ["destroy","apply"] and not iac_ci_folder_configs.get(action)):
             failed_message = f'Not Allowed @ `.iac_ci/config.yaml`: **iac_ci_folder=`{iac_ci_folder_configs["iac_ci_folder"]}` | action=`{action}`**'
