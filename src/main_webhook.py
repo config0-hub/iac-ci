@@ -611,6 +611,21 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         self.db.table_runs.insert(values)
 
+        # Log folders and run_ids for user inspection
+        self.logger.info("#" * 32)
+        self.logger.info("# REPORT ALL TF - FOLDERS TO EVALUATE")
+        self.logger.info("#" * 32)
+        for i, folder in enumerate(self.report_folders):
+            run_id = parallel_folder_builds[i]
+            self.logger.info(f"# Folder {i+1}: {folder} -> Run ID: {run_id}")
+        self.logger.info("#" * 32)
+        self.logger.info("# Waiting 60 seconds for user inspection...")
+        self.logger.info("# Cancel the step function if needed during this period")
+        self.logger.info("#" * 32)
+        
+        # Wait 60 seconds for user inspection
+        sleep(60)
+
         return {
             "status": True,
             "parallel_folder_builds": parallel_folder_builds
@@ -1087,6 +1102,15 @@ class WebhookProcess(PlatformReporter, CloneCheckOutCode):
 
         if self.report_folders:
             iac_ci_folder_configs_info = self._exec_report_folders()
+            
+            # Log folders for report all tf operation
+            if self.report_folders and iac_ci_folder_configs_info.get("status"):
+                self.logger.info("#" * 32)
+                self.logger.info("# REPORT ALL TF - DISCOVERED FOLDERS")
+                self.logger.info("#" * 32)
+                for i, folder in enumerate(self.report_folders):
+                    self.logger.info(f"# Folder {i+1}: {folder}")
+                self.logger.info("#" * 32)
         else:
             iac_ci_folder_configs_info = self._exec_iac_ci_folder()
 

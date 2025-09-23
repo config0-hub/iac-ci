@@ -20,12 +20,11 @@ Destroy operations are used to tear down infrastructure resources managed by Ter
 ### Trigger Conditions
 
 #### 1. Comment-Based Trigger
-**Comment Format**: `plan destroy <check_string>` or `check destroy <check_string>`
+**Comment Format**: `plan destroy tf`
 
 **Example**:
 ```
-plan destroy confirm
-check destroy destroy_my_infra
+plan destroy tf
 ```
 
 **Location**: `src/main_webhook.py` lines 708-713
@@ -39,12 +38,11 @@ check destroy destroy_my_infra
 
 ```mermaid
 graph TD
-    A[User Comments: plan destroy <check_string>] --> B[Validate Comment Format]
+    A[User Comments: plan destroy tf] --> B[Validate Comment Format]
     B --> C[Check Configuration: destroy: true]
     C --> D[Set plan_destroy = True]
-    D --> E[Generate Destroy Plan]
-    E --> F[Display Plan with Wait Period]
-    F --> G[Execute terraform destroy -auto-approve]
+    D --> E[Display Plan with Wait Period]
+    F --> G[Execute tofu destroy -auto-approve]
     G --> H[Update PR with Results]
 ```
 
@@ -61,9 +59,9 @@ graph TD
 - **Method**: `get_tf_plan_destroy()`
 - **Commands**:
   ```bash
-  terraform init
-  terraform validate
-  terraform plan -destroy
+  tofu init
+  tofu validate
+  tofu plan -destroy
   ```
 
 #### Step 3: Safety Review
@@ -73,7 +71,7 @@ graph TD
 
 #### Step 4: Execution
 - **Method**: `get_tf_destroy()`
-- **Command**: `terraform destroy -auto-approve`
+- **Command**: `tofu destroy -auto-approve`
 - **Location**: `src/iac_ci/helper/resource/terraform.py` line 341
 
 ### Safety Measures for Destroy
@@ -94,12 +92,11 @@ Apply operations deploy infrastructure changes using Terraform. This is the prim
 ### Trigger Conditions
 
 #### 1. Comment-Based Trigger
-**Comment Format**: `apply tf <check_string>`
+**Comment Format**: `apply tf`
 
 **Example**:
 ```
-apply tf deploy
-apply tf production
+apply tf
 ```
 
 **Location**: `src/main_webhook.py` lines 749-790
@@ -113,13 +110,13 @@ apply tf production
 
 ```mermaid
 graph TD
-    A[User Comments: apply tf <check_string>] --> B[Validate Comment Format]
-    B --> C[Check Configuration: apply: true]
-    C --> D[Check Approval Requirements]
-    D --> E[Generate Apply Plan]
-    E --> F[Display Plan with Wait Period]
-    F --> G[Execute terraform apply tfplan]
-    G --> H[Update PR with Results]
+    A[User Comments: plan tf] --> B[Validate Comment Format]
+    C[User Comments: apply tf] --> D[Validate Comment Format]
+    E --> F[Check Configuration: apply: true]
+    G --> H[Check Approval Requirements]
+    I --> J[Display Plan with Wait Period]
+    K --> L[Execute tofu apply tfplan]
+    M --> N[Update PR with Results]
 ```
 
 ### Detailed Steps
@@ -135,9 +132,9 @@ graph TD
 - **Method**: `get_tf_ci()` for plan, `get_tf_apply()` for execution
 - **Commands**:
   ```bash
-  terraform init
-  terraform validate
-  terraform plan -out=tfplan
+  tofu init
+  tofu validate
+  tofu plan -out=tfplan
   ```
 
 #### Step 3: Safety Review
@@ -147,7 +144,7 @@ graph TD
 
 #### Step 4: Execution
 - **Method**: `get_tf_apply()`
-- **Command**: `terraform apply tfplan`
+- **Command**: `tofu apply tfplan`
 - **Location**: `src/iac_ci/helper/resource/terraform.py` line 321
 
 ### Apply Safety Measures
@@ -163,8 +160,8 @@ graph TD
 | Aspect | Apply | Destroy |
 |--------|-------|---------|
 | Wait Time | 30 seconds | 120 seconds |
-| Command | `terraform apply tfplan` | `terraform destroy -auto-approve` |
-| Plan Command | `terraform plan -out=tfplan` | `terraform plan -destroy` |
+| Command | `tofu apply tfplan` | `tofu destroy -auto-approve` |
+| Plan Command | `tofu plan -out=tfplan` | `tofu plan -destroy` |
 | Risk Level | Medium | High |
 
 ---
@@ -177,7 +174,7 @@ Report All TF operations provide comprehensive analysis across multiple Terrafor
 ### Trigger Conditions
 
 #### 1. Comment-Based Trigger
-**Comment Format**: `report all tf <check_string>`
+**Comment Format**: `report all tf`
 
 **Example**:
 ```
@@ -191,7 +188,7 @@ report all tf status
 
 ```mermaid
 graph TD
-    A[User Comments: report all tf <check_string>] --> B[Validate Comment Format]
+    A[User Comments: report all tf] --> B[Validate Comment Format]
     B --> C[Discover All .iac_ci/config.yaml Folders]
     C --> D[Create Parallel Builds for Each Folder]
     D --> E[Execute CI Checks in Parallel]
